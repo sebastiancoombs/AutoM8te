@@ -1,32 +1,35 @@
 # AutoM8te - Product Requirements Document
 
-**Version:** 0.1  
+**Version:** 0.2  
 **Date:** March 12, 2026  
-**Status:** Initial Draft  
+**Status:** Simulation-Focused Draft  
+**Scope:** Simulation validation only — hardware implementation deferred to future phase
 
 ---
 
 ## Vision
 
-**Build a voice-controlled AI drone swarm system where one human operator coordinates multiple drones through natural language and gesture commands.**
+**Build and validate a voice-controlled AI drone swarm system in simulation where one human operator coordinates multiple drones through natural language commands and computer vision.**
 
 Core principles:
-- **One brain, multiple bodies** — All intelligence lives on ground station, drones are lightweight actuators
-- **Always in control** — Manual RC override available instantly, AI augments (never replaces) human pilot
+- **One brain, multiple bodies** — All intelligence lives on ground station, drones are simulated actuators
+- **Object-aware intelligence** — Track and follow any object (people, cars, animals) via YOLO + CV
 - **Skills-based flexibility** — New capabilities added as OpenClaw skills, not hardcoded features
-- **Spatial audio feedback** — Each drone speaks from the air, creating intuitive team coordination
+- **Prove in simulation first** — Validate all behaviors in AirSim before considering hardware
 
 ---
 
 ## The Problem
 
 Current drone control requires:
-- Dedicated RC transmitter per task (racing, cinematography, FPV)
 - Manual piloting skills for complex maneuvers
 - No coordination between multiple drones
+- Limited object recognition (manual targeting)
 - Programming new behaviors requires recompiling firmware
 
-**We want:** Natural language commands, autonomous behaviors, multi-drone coordination, and hot-swappable skills.
+**We want:** Natural language commands ("follow that car"), autonomous object tracking, multi-drone coordination, and hot-swappable skills.
+
+**We will prove it works in simulation before building hardware.**
 
 ---
 
@@ -37,37 +40,42 @@ Current drone control requires:
 │         Ground Station (OpenClaw)          │
 │                                            │
 │  Voice Input → Intent Recognition          │
-│  Video Feeds → Computer Vision             │
+│  Video Feeds → YOLO + CV Pipeline          │
 │  Skills Layer → Control Generation         │
-│  Audio Output → Per-Drone TTS              │
+│  Audio Output → TTS Feedback               │
 └────────────────────────────────────────────┘
-                    ↕ (Digital Video + CRSF)
-┌──────────┬──────────┬──────────┬──────────┐
-│ Drone 1  │ Drone 2  │ Drone 3  │ Drone 4  │
-│          │          │          │          │
-│ - Camera │ - Camera │ - Camera │ - Camera │
-│ - RC RX  │ - RC RX  │ - RC RX  │ - RC RX  │
-│ - Speaker│ - Speaker│ - Speaker│ - Speaker│
-│ - FC     │ - FC     │ - FC     │ - FC     │
-└──────────┴──────────┴──────────┴──────────┘
+                    ↕ (AirSim API)
+┌─────────────────────────────────────────────┐
+│           AirSim (Unreal Engine)            │
+│                                             │
+│  ┌──────────┬──────────┬──────────────┐    │
+│  │ Drone 1  │ Drone 2  │ Drone 3 & 4  │    │
+│  │ Camera   │ Camera   │ Cameras      │    │
+│  │ Physics  │ Physics  │ Physics      │    │
+│  └──────────┴──────────┴──────────────┘    │
+│                                             │
+│  Environment: Urban scene with cars,        │
+│              people, buildings              │
+└─────────────────────────────────────────────┘
 ```
 
-### Design Decision: Ground-Based Compute
+### Design Decision: Simulation-First
 
-**Why not onboard compute?**
-- Weight penalty (200g+ per drone for Pi + camera + mounts)
-- Limited compute power (Pi 5 vs laptop/desktop)
-- Harder debugging (logs/crashes in the air)
-- More expensive (multiply by N drones)
+**Why simulation only (for now)?**
+- ✅ Prove architecture works before hardware spend
+- ✅ Iterate faster (no battery swaps, no crash repairs)
+- ✅ Test dangerous scenarios safely (collision avoidance, signal loss)
+- ✅ Photorealistic CV (AirSim + Unreal Engine)
+- ✅ Perfect telemetry (no sensor noise)
 
-**Why ground station?**
-- ✅ Drones stay light, fast, cheap
-- ✅ Powerful compute available (laptop/desktop)
-- ✅ All debugging on ground
-- ✅ Manual override always available (you're holding the controller)
-- ✅ Easy to scale (same ground station controls N drones)
+**Why AirSim specifically?**
+- ✅ Unreal Engine rendering (best CV quality)
+- ✅ Multiple camera views per drone
+- ✅ Python API for control
+- ✅ Supports object spawning (cars, people, obstacles)
+- ✅ Multi-drone support out of the box
 
-**Tradeoff accepted:** 100-200ms latency (video → processing → command). This is fine for most tasks (follow-me, patrol, formation). Not suitable for racing/aerobatics (but those stay manual anyway).
+**Hardware deferred:** Once simulation validates all behaviors, hardware becomes a mechanical engineering problem (not a software risk).
 
 ---
 
@@ -77,24 +85,18 @@ Current drone control requires:
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
 | **Orchestration** | OpenClaw | Skills-based, LLM integration, proven runtime |
-| **Language** | Python | Best drone libraries, CV support |
-| **Computer Vision** | MediaPipe | Fast, CPU-only, pose + gesture detection |
+| **Language** | Python | Best drone + CV libraries |
+| **Object Detection** | YOLOv8 | Fast, accurate, multi-class detection (people, cars, animals) |
+| **Computer Vision** | MediaPipe | Pose + gesture detection (supplementary to YOLO) |
 | **Voice I/O** | ElevenLabs API | High quality STT/TTS, low latency |
-| **Video Input** | OpenCV + V4L2 | Standard capture, USB HDMI dongles |
-| **Control Output** | CRSF protocol | Industry standard, bidirectional, low latency |
-| **Audio Output** | Bluetooth A2DP | Wireless, per-drone routing |
+| **Simulation Control** | AirSim Python API | Direct control, telemetry, camera access |
+| **Video Processing** | OpenCV | Frame capture, pre-processing for YOLO |
 
-### Drones (per unit)
-- **Flight controller:** Betaflight (lightweight, proven)
-- **Video TX:** DJI O3 Air Unit or HDZero (digital, 1080p clean)
-- **RC receiver:** ExpressLRS (low latency, bidirectional telemetry)
-- **Speaker:** Small Bluetooth (~50g, <$20)
-- **Frame:** 5-inch racing quad (light, durable, fast)
-
-### Simulation
-- **ArduPilot SITL** for flight dynamics
-- **Gazebo** (optional) for 3D visualization
-- **MAVSDK-Python** for control (works in sim + real hardware)
+### Simulation Environment
+- **AirSim** — Unreal Engine-based drone simulator
+- **Unreal Engine 5** — Photorealistic rendering for CV
+- **Python API** — Control interface (waypoints, velocity, camera)
+- **Multi-drone support** — Native in AirSim settings
 
 ---
 
@@ -103,68 +105,79 @@ Current drone control requires:
 ### 1. Drone Swarm Manager (Custom Service)
 
 **Drone Registry:**
-- Tracks state of N drones (ID, battery, GPS, task, video feed, control channel)
-- Updates telemetry in real-time (battery, position, signal strength)
+- Tracks state of N drones (ID, position, orientation, task, camera feed)
+- Updates telemetry from AirSim API (position, velocity, collision state)
 
 **Command Router:**
-- Parses intent: "Drone 2, follow me" → `{target: "drone_2", action: "follow"}`
+- Parses intent: "Drone 2, follow that car" → `{target: "drone_2", action: "follow", object: "car"}`
 - Routes to specific drone or broadcasts to all
 - Handles addressing modes: individual, group, broadcast
 
 **Collision Avoidance:**
-- Tracks positions of all active drones
+- Tracks positions of all active drones via AirSim telemetry
 - Predicts movement paths
 - Overrides commands if collision risk detected (5m minimum separation)
 
-**Telemetry Aggregation:**
-- Reads CRSF telemetry from all drones
-- Surfaces to OpenClaw tools (`drone_query`, etc.)
+**Object Tracker:**
+- Maintains registry of detected objects (ID, class, position, velocity)
+- Associates OpenClaw intent with YOLO detections
+- Resolves ambiguity ("that car" → which car? closest? pointed at?)
 
 ### 2. OpenClaw Integration
 
 **Custom Tools (to build):**
 ```python
-drone_command(drone_id, roll, pitch, throttle, yaw)  # Send control
-drone_query(drone_id)  # Read telemetry
+drone_move(drone_id, x, y, z, yaw)  # Move to position (NED coords)
+drone_velocity(drone_id, vx, vy, vz)  # Set velocity vector
+drone_query(drone_id)  # Read telemetry (position, orientation, collision state)
 drone_broadcast(command)  # Send to all drones
-video_feed(drone_id)  # Get CV results
+detect_objects(drone_id, classes=["car", "person"])  # YOLO detection from camera
+track_object(drone_id, object_id)  # Follow specific detected object
 ```
 
 **Skills (examples):**
-- `follow-me` — CV tracks person, drone maintains follow distance
-- `patrol-route` — Autonomous waypoint navigation
+- `follow-object` — YOLO tracks object (car, person, animal), drone maintains follow distance
+- `patrol-route` — Autonomous waypoint navigation in AirSim environment
 - `formation-flight` — Multi-drone coordination with relative positioning
 - `search-pattern` — Coverage algorithm, coordinate multiple drones
-- `manual-assist` — AI augments stick inputs (stabilization, auto-level)
+- `orbit-object` — Circle around detected object at fixed radius
 
 ### 3. Computer Vision Pipeline
 
-**Input:** Digital FPV feed (1080p) via USB HDMI capture  
-**Processing:** MediaPipe Pose Landmarker (person tracking) + Hand Landmarker (gestures)  
-**Output:** Person position, gesture classification → control commands
+**Input:** AirSim camera feed (RGB images, 30+ fps, 1080p)  
+**Processing Pipeline:**
+1. **YOLO v8** — Object detection (80+ classes: person, car, truck, dog, etc.)
+2. **MediaPipe** (optional) — Pose/gesture for human interaction
+3. **Object Tracking** — Maintain ID across frames (SORT/DeepSORT)
+4. **Spatial Positioning** — Estimate 3D position from bounding box + camera intrinsics
 
-**Gesture Vocabulary (initial):**
-- **Push away** → "back up"
-- **Pull toward** → "come closer"
-- **Point direction** → "go that way"
-- **Stop sign** → "hover/stop"
-- **Wave** → "return to me"
+**Output:** List of detected objects with:
+- Class (car, person, dog, etc.)
+- Bounding box (pixel coords)
+- Confidence score
+- Tracking ID (persistent across frames)
+- Estimated 3D position (relative to drone)
+
+**Example Use Cases:**
+- "Follow that car" → YOLO detects cars, user points or specifies ("red car"), drone tracks
+- "Circle around that person" → YOLO + MediaPipe detects person, drone orbits
+- "Avoid all obstacles" → YOLO detects objects, collision avoidance uses positions
 
 ### 4. Voice Interface
 
 **Input:** Ground station mic → ElevenLabs STT  
 **Processing:** OpenClaw LLM parses intent, routes to skill  
-**Output:** TTS audio → routed to specific drone's Bluetooth speaker  
+**Output:** TTS audio → ground station speakers (for simulation)
 
 **Addressing modes:**
-- **"Drone 2, follow me"** → Targets specific drone
+- **"Drone 2, follow that car"** → Targets specific drone
 - **"All drones, return home"** → Broadcasts to all
 - **"Scout team, patrol north"** → Group addressing (Drones 1-3)
 
 **Feedback loop:**
 - User command → OpenClaw processes → skill executes → TTS response
-- Response plays from **targeted drone's speaker in the air**
-- Spatial audio = you know which drone is responding
+- Response format: "[Drone 2]: Following red sedan"
+- Console logging for debugging, audio feedback for natural interaction
 
 ---
 
@@ -176,213 +189,192 @@ video_feed(drone_id)  # Get CV results
 - Define architecture
 - Choose tech stack
 
-### Phase 1: Simulation Foundation (Week 1-2)
-**Goal:** Single drone responds to voice commands in simulation.
+### Phase 1: AirSim + Basic Control (Week 1-2)
+**Goal:** Single drone responds to voice commands in AirSim.
 
 **Tasks:**
-- Install ArduPilot SITL + MAVSDK-Python
-- Launch simulated drone
-- Voice command: "Arm" → drone arms (in sim)
+- Install AirSim + Unreal Engine 5
+- Configure urban environment (Blocks or City scene)
+- Connect OpenClaw to AirSim Python API
 - Voice command: "Take off" → drone takes off
+- Voice command: "Move forward 10 meters" → drone moves
 - Voice command: "Land" → drone lands
-- Verify telemetry reads correctly (battery, GPS, altitude)
+- Verify telemetry reads correctly (position, orientation, collision state)
 
 **Success criteria:**
-- OpenClaw routes voice commands to MAVSDK calls
-- Drone responds correctly in SITL
-- Telemetry visible in logs
+- [ ] OpenClaw routes voice commands to AirSim API calls
+- [ ] Drone responds correctly in simulation
+- [ ] Telemetry visible in logs
+- [ ] Camera feed accessible from Python
 
-### Phase 2: Computer Vision (Week 3-4)
-**Goal:** Follow-me behavior works in simulation with synthetic video.
+### Phase 2: YOLO Object Detection (Week 3-4)
+**Goal:** Drone detects and identifies objects in AirSim environment.
 
 **Tasks:**
-- Record 30-second video of person moving
-- Run MediaPipe person detection on video
-- Calculate control inputs to keep person centered in frame
-- Send control to simulated drone
-- Tune PID controllers (avoid oscillation)
+- Integrate YOLOv8 with AirSim camera feed
+- Spawn objects in AirSim (cars, people, obstacles)
+- Test detection: verify YOLO correctly identifies spawned objects
+- Implement object tracking (maintain ID across frames)
+- Display bounding boxes + labels in debug view
 
 **Success criteria:**
-- Voice: "Follow me" → activates CV loop
-- Simulated drone tracks person in synthetic video
-- Smooth following (no wild oscillations)
+- [ ] YOLO detects cars, people, obstacles in AirSim renders
+- [ ] Detection runs at 20+ fps (fast enough for control)
+- [ ] Object IDs persist across frames (tracking works)
+- [ ] False positive rate <10% (reliable detection)
 
-### Phase 3: Multi-Drone Coordination (Week 5-6)
-**Goal:** Control 4 drones independently in simulation.
+### Phase 3: Follow-Object Behavior (Week 5-6)
+**Goal:** Drone tracks and follows detected objects via voice command.
 
 **Tasks:**
-- Spawn 4 SITL drones (unique ports)
+- Voice command: "Follow that car" → drone identifies closest car, begins following
+- Implement PID control: keep object centered in frame
+- Maintain safe distance (5-10m behind object)
+- Handle object loss (car drives behind building → drone hovers, waits)
+- Test with moving vehicles in AirSim
+
+**Success criteria:**
+- [ ] Drone locks onto specified object (car, person, etc.)
+- [ ] Maintains follow distance without oscillation
+- [ ] Recovers when object temporarily occluded
+- [ ] Voice command switches targets: "Follow that person instead"
+
+### Phase 4: Multi-Drone Coordination (Week 7-8)
+**Goal:** Control 4 drones independently in same AirSim environment.
+
+**Tasks:**
+- Spawn 4 drones in AirSim (configured via settings.json)
 - Implement Drone Registry (track state of each)
-- Test individual addressing: "Drone 2, take off"
+- Test individual addressing: "Drone 2, follow that car"
 - Test broadcast: "All drones, land"
-- Implement collision avoidance
-- Test: fly two drones toward each other, verify override
+- Implement collision avoidance (5m minimum separation)
+- Test: send two drones toward same target, verify avoidance
 
 **Success criteria:**
-- All 4 drones controllable independently
-- Addressing works correctly (individual, broadcast, group)
-- Collision avoidance prevents crashes
+- [ ] All 4 drones controllable independently
+- [ ] Addressing works correctly (individual, broadcast, group)
+- [ ] Collision avoidance prevents simulated crashes
+- [ ] Each drone can track different objects simultaneously
 
-### Phase 4: Hardware Prototype (Week 7-10)
-**Goal:** One real drone responds to voice commands.
+### Phase 5: Advanced Coordination (Week 9-10)
+**Goal:** Complex multi-drone behaviors (formation, search patterns).
 
 **Tasks:**
-- Build/buy first racing quad (5-inch, digital video, ELRS)
-- Connect ground station: HDMI capture, CRSF controller
-- Port skills from MAVSDK to CRSF protocol
-- Test basic commands: arm, takeoff, land
-- Add Bluetooth speaker to drone
-- Test voice feedback (TTS from drone)
+- Formation flight: maintain diamond/line formation while following object
+- Search pattern: 4 drones cover area systematically
+- Orbit mode: drones circle object from different angles
+- Coordinated landing: all drones land in sequence without collision
 
 **Success criteria:**
-- One real drone flies via voice commands
-- Video feed captured correctly
-- Manual RC override works instantly
-- Voice feedback audible from drone speaker
-
-### Phase 5: Real Follow-Me (Week 11-12)
-**Goal:** Real drone tracks and follows a person outdoors.
-
-**Tasks:**
-- Run MediaPipe on live FPV feed (not synthetic video)
-- Tune PID for real flight dynamics (wind, lag, etc.)
-- Test in open area (safety first)
-- Implement failsafes (signal loss, battery low, person lost)
-
-**Success criteria:**
-- Drone tracks person smoothly
-- Maintains safe distance (3-5m)
-- Failsafes trigger correctly
-
-### Phase 6: Multi-Drone Real Flight (Week 13-16)
-**Goal:** 2-4 real drones coordinate in flight.
-
-**Tasks:**
-- Build/buy 2nd, 3rd, 4th drones (identical hardware)
-- Test individual control of 2 drones
-- Implement formation flight (maintain relative positions)
-- Test collision avoidance in real flight
-- Implement coordinated tasks (patrol, search)
-
-**Success criteria:**
-- All drones addressable independently
-- Formation flight stable
-- Collision avoidance prevents real crashes
-- Coordinated patrol/search works
-
-### Phase 7: Advanced Skills (Week 17+)
-**Goal:** Rich skill library, swarm intelligence.
-
-**Tasks:**
-- `search-pattern` skill (coverage algorithm)
-- `swarm-mode` skill (emergent behavior)
-- `trick-mode` skill (coordinated aerobatics)
-- `manual-assist` skill (AI-augmented piloting)
-- Gesture control (hand signals → commands)
-
-**Success criteria:**
-- Each skill documented (SKILL.md)
-- Skills hot-swappable (no recompile)
-- Skills composable (combine for complex tasks)
+- [ ] Formation flight maintains shape during maneuvers
+- [ ] Search pattern achieves >90% area coverage
+- [ ] Orbit mode: 4 drones at 90° intervals around object
+- [ ] Coordinated behaviors composable (can combine skills)
 
 ---
 
 ## User Experience
 
-### Typical Use Case: 3-Drone Patrol
+### Typical Use Case: 3-Drone Object Tracking in AirSim
 
 **Setup:**
-1. Operator powers on ground station (laptop)
-2. Powers on 3 drones, they connect automatically
-3. Operator hears confirmation from each: "Drone 1 ready", "Drone 2 ready", "Drone 3 ready"
+1. Launch AirSim with urban environment
+2. Start OpenClaw ground station
+3. Spawn 3 drones in simulation
+4. Spawn traffic (cars, pedestrians)
 
 **Mission:**
-1. **Operator:** "All drones, arm"  
-   **Drones:** [beep sounds from all 3]
+1. **Operator:** "All drones, take off"  
+   **System:** [All 3 drones lift to 5m hover in AirSim]  
+   **Feedback:** "All drones airborne"
 
-2. **Operator:** "All drones, take off"  
-   **Drones:** [all lift off to 2m hover]  
-   **Drone 1:** "Airborne"  
-   **Drone 2:** "Airborne"  
-   **Drone 3:** "Airborne"
+2. **Operator:** "Drone 1, follow that red car"  
+   **System:** [YOLO detects cars, identifies red vehicle, Drone 1 locks on]  
+   **Drone 1:** "Following red sedan, maintaining 8 meters"
 
-3. **Operator:** "Drone 1, follow me. Drone 2 and 3, patrol the perimeter."  
-   **Drone 1:** "Following"  
-   **Drone 2:** "Starting patrol, north sector"  
-   **Drone 3:** "Starting patrol, south sector"
+3. **Operator:** "Drone 2, circle around that person"  
+   **System:** [YOLO + MediaPipe detect person, Drone 2 begins orbit at 10m radius]  
+   **Drone 2:** "Orbiting target, 360 coverage active"
 
-4. [Operator walks around, Drone 1 follows. Drones 2 and 3 patrol autonomously.]
+4. **Operator:** "Drone 3, patrol between waypoints Alpha and Bravo"  
+   **System:** [Drone 3 flies predetermined route]  
+   **Drone 3:** "Patrol active"
 
-5. **Drone 2:** "Movement detected, sector B"  
-   **Operator:** "Drone 2, investigate and report"  
-   **Drone 2:** "Investigating... false alarm, just a deer"
+5. [Red car turns corner, drives behind building]  
+   **Drone 1:** "Target occluded, holding position"  
+   [Car emerges 5 seconds later]  
+   **Drone 1:** "Target reacquired, resuming follow"
 
-6. **Operator:** "All drones, return and land"  
-   **Drones:** [all return to launch point, land]  
-   **Drone 1:** "Landed, battery 42%"  
-   **Drone 2:** "Landed, battery 38%"  
-   **Drone 3:** "Landed, battery 45%"
+6. **Operator:** "Drone 1, switch to that blue truck instead"  
+   **System:** [YOLO re-targets, Drone 1 switches to blue truck]  
+   **Drone 1:** "Now following blue pickup truck"
+
+7. **Operator:** "All drones, land at home position"  
+   **System:** [All drones return to launch coordinates, land sequentially]  
+   **Feedback:** "All drones landed"
 
 **Key UX principles:**
-- Voice is primary interface (hands free for RC stick if needed)
-- Spatial audio (responses come from the drone in the air)
-- Autonomous execution of clear commands
-- Manual override available instantly (grab sticks)
-- Proactive notifications (battery, detection events)
+- Voice is primary interface
+- Object recognition enables natural commands ("that car", "the person")
+- Autonomous tracking with proactive status updates
+- Graceful handling of edge cases (occlusion, object loss)
+- Multi-drone coordination without operator micromanagement
 
 ---
 
-## Success Criteria
+## Success Criteria (Simulation Only)
 
-### Phase 1 (Simulation)
-- [ ] Voice command arms/disarms simulated drone
-- [ ] Voice command makes simulated drone take off / land
-- [ ] Telemetry reads correctly (battery, GPS, altitude)
+### Phase 1: AirSim + Basic Control
+- [ ] Voice command makes drone take off in AirSim
+- [ ] Voice command moves drone to specific coordinates
+- [ ] Voice command lands drone
+- [ ] Telemetry reads correctly (position, orientation, collision state)
+- [ ] Camera feed accessible and displays AirSim renders
 
-### Phase 2 (CV in Sim)
-- [ ] MediaPipe detects person in synthetic video
-- [ ] Control inputs calculated correctly to center person
-- [ ] Simulated drone follows person smoothly
+### Phase 2: YOLO Object Detection
+- [ ] YOLO detects cars in AirSim environment (>90% accuracy)
+- [ ] YOLO detects people in AirSim environment (>90% accuracy)
+- [ ] Detection runs at 20+ fps (real-time)
+- [ ] Object tracking maintains IDs across frames
+- [ ] False positive rate <10%
 
-### Phase 3 (Multi-Drone Sim)
-- [ ] 4 drones controlled independently in SITL
-- [ ] Individual addressing works ("Drone 2, take off")
-- [ ] Broadcast works ("All drones, land")
-- [ ] Collision avoidance prevents simulated crashes
+### Phase 3: Follow-Object Behavior
+- [ ] Voice: "Follow that car" → drone locks onto closest car
+- [ ] Drone maintains 5-10m follow distance
+- [ ] PID control prevents oscillation (<1m position error)
+- [ ] Drone handles object occlusion (waits, resumes)
+- [ ] Voice: "Follow that person instead" → switches targets correctly
 
-### Phase 4 (Hardware Prototype)
-- [ ] Real drone arms/takes off/lands via voice
-- [ ] FPV video captured on ground station
-- [ ] Manual RC override instant (<50ms)
-- [ ] Voice feedback audible from drone speaker
+### Phase 4: Multi-Drone Coordination
+- [ ] 4 drones spawn in AirSim without collision
+- [ ] Individual addressing: "Drone 2, take off" (others stay grounded)
+- [ ] Broadcast: "All drones, land" (all execute)
+- [ ] Collision avoidance: 2 drones sent toward same point → maintain 5m separation
+- [ ] Each drone can track different object simultaneously
 
-### Phase 5 (Real Follow-Me)
-- [ ] Real drone tracks person outdoors
-- [ ] Maintains 3-5m following distance
-- [ ] Failsafes work (signal loss → RTL, battery low → land)
+### Phase 5: Advanced Coordination
+- [ ] Formation flight: 4 drones maintain diamond formation for 60+ seconds
+- [ ] Search pattern: 4 drones achieve >90% area coverage
+- [ ] Orbit mode: 4 drones at 90° intervals around object
+- [ ] Coordinated landing: all drones land without collision
+- [ ] Skills composable: formation + follow-object works together
 
-### Phase 6 (Multi-Drone Real)
-- [ ] 2+ real drones controlled independently
-- [ ] Formation flight maintained for 60+ seconds
-- [ ] Collision avoidance prevents real crashes
-
-### Phase 7 (Advanced Skills)
-- [ ] 5+ skills documented and working
-- [ ] Skills hot-swappable (no code recompile)
-- [ ] Skills composable (can combine for complex behavior)
+**Project complete when all Phase 5 criteria met.**  
+**Hardware implementation is a separate future phase, not in this PRD.**
 
 ---
 
-## Non-Goals (v1.0)
+## Non-Goals (Simulation Phase)
 
-**Out of scope for first release:**
-- Fully autonomous beyond-visual-line-of-sight (BVLOS) flight
-- Racing/aerobatics (those stay manual, AI can assist but not control)
-- Indoor navigation (outdoor-only for Phase 1-7)
+**Out of scope for this PRD:**
+- **Hardware implementation** — deferred to future phase after simulation validation
+- Real-world physics challenges (wind, GPS drift, battery management)
+- Racing/aerobatics (focus on autonomous tracking, not manual piloting augmentation)
+- Indoor navigation (AirSim outdoor/urban environments only)
 - Object manipulation (no grippers, delivery mechanisms)
-- Charging automation (manual battery swaps)
+- Advanced ML (reinforcement learning, custom vision models beyond YOLO)
 
-**Why:** Focus on core value proposition (voice-controlled coordination) before expanding scope.
+**Why:** Prove the architecture and core behaviors in simulation first. Hardware is a deployment detail, not a software architecture risk.
 
 ---
 
@@ -390,35 +382,40 @@ video_feed(drone_id)  # Get CV results
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| **Latency too high** (>200ms) for follow-me | High | Test in sim first, tune buffering, fall back to manual control |
-| **Video quality insufficient** for CV | High | Use digital FPV (DJI O3/HDZero), not analog |
-| **Collision avoidance false positives** | Medium | Conservative min distance (5m), manual override always available |
-| **Bluetooth audio dropouts** | Low | Test range in open area, fall back to ground station speaker |
-| **Skills conflict** (two skills want control) | Medium | Priority system (manual > safety > autonomous), skill orchestration layer |
-| **Regulatory (FAA)** | High | Operate under Part 107 rules, maintain VLOS, <400ft AGL |
+| **YOLO false positives** (detects non-existent objects) | High | Confidence threshold tuning, secondary validation (tracking consistency) |
+| **AirSim performance** (low fps, stuttering) | High | Reduce graphics quality, use simpler environment, upgrade GPU if needed |
+| **Object tracking loss** (ID switches between frames) | Medium | Use DeepSORT (appearance-based), not just IOU matching |
+| **Collision avoidance false positives** | Medium | Conservative min distance (5m), log all overrides for analysis |
+| **Skills conflict** (two skills want control) | Medium | Priority system (safety > autonomous > idle), skill orchestration layer |
+| **AirSim API limitations** | Medium | Test early, fall back to ROS bridge if Python API insufficient |
+| **Unreal Engine crashes** | Low | Save environment frequently, automate scene setup via scripts |
 
 ---
 
 ## Open Questions
 
-1. **CRSF vs MAVLink:** Do we stick with CRSF for racing drones, or add MAVLink bridge for more features?
-2. **Bluetooth range:** Will 50-100m range be sufficient, or do we need analog audio TX?
-3. **Video multiplexing:** How do we handle 4x 1080p streams on one laptop? (USB bandwidth)
-4. **Gesture priority:** If voice and gesture commands conflict, which wins?
-5. **Battery management:** How does ground station track battery and force-land low drones?
+1. **YOLO model size:** YOLOv8 nano/small/medium/large? (Speed vs accuracy tradeoff)
+2. **Object selection ambiguity:** "Follow that car" when 5 cars visible — how to resolve? Closest? Pointing gesture? Explicit ("the red one")?
+3. **AirSim multi-drone performance:** Can one laptop run 4 drones + YOLO + Unreal rendering at 30fps?
+4. **Tracking persistence:** How long should drone remember an object after occlusion before giving up?
+5. **Formation rigidity:** Fixed formation (diamond always) or dynamic (adapt to obstacles)?
 
-**Resolution path:** Build Phase 1-2 (simulation), answers will emerge from testing.
+**Resolution path:** Build Phase 1-2, answers will emerge from testing. Document decisions as we go.
 
 ---
 
 ## Next Steps
 
 - [x] Create repo
-- [x] Write PRD
-- [ ] Set up dev environment (ArduPilot SITL, MAVSDK, OpenClaw)
-- [ ] Implement Phase 1: Single drone in simulation
-- [ ] Document simulation setup in README.md
+- [x] Write PRD (simulation-scoped)
+- [ ] Install AirSim + Unreal Engine 5
+- [ ] Configure AirSim with urban environment (Blocks or City)
+- [ ] Install YOLOv8 + test on sample images
+- [ ] Set up OpenClaw → AirSim Python API connection
+- [ ] Implement Phase 1: Single drone basic control
+- [ ] Document AirSim setup in README.md
 
 ---
 
-**This is an architecture brainstorm, not a commitment. Expect this PRD to evolve as we learn.**
+**This PRD is simulation-focused. Hardware implementation is a separate future phase.**  
+**Expect this document to evolve as we learn from testing.**
