@@ -8,8 +8,21 @@ One operator, multiple simulated drones, natural language commands.
 
 ## Status
 
-**Phase 0: Planning** (PRD complete — simulation-scoped)
+**Phase 1: AirSim + Basic Control** (In Progress)
 
+✅ Completed:
+- Swarm Manager core (drone state, registry, collision detection)
+- AirSim Bridge (API integration, telemetry, control)
+- Test script for connection validation
+- Setup documentation
+
+🚧 Next:
+- Install AirSim + Unreal Engine
+- Test hardware-in-loop connection
+- Build OpenClaw MCP tools
+- Add voice command layer
+
+See [docs/PHASE1_CHECKLIST.md](docs/PHASE1_CHECKLIST.md) for detailed progress.  
 See [PRD.md](PRD.md) for full product requirements.
 
 ---
@@ -62,9 +75,34 @@ Unreal Engine 5 (AirSim)
 
 ---
 
-## Setup (Coming Soon)
+## Quick Start
 
-Installation instructions for AirSim + Unreal Engine + YOLOv8 will be added as Phase 1 progresses.
+### 1. Install Dependencies
+
+```bash
+# Python dependencies
+pip install -r requirements.txt
+```
+
+### 2. Setup AirSim
+
+Follow [docs/AIRSIM_SETUP.md](docs/AIRSIM_SETUP.md) to install:
+- Unreal Engine 5
+- AirSim (built from source)
+- Test environment (Blocks recommended)
+
+### 3. Test Connection
+
+```bash
+# Make sure AirSim is running, then:
+python tests/test_airsim_connection.py
+```
+
+Expected: Single drone takes off, moves forward 10m, lands.
+
+### 4. Next Steps
+
+See [docs/PHASE1_CHECKLIST.md](docs/PHASE1_CHECKLIST.md) for development roadmap.
 
 ---
 
