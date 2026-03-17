@@ -8,9 +8,19 @@ One operator, multiple simulated drones, natural language commands.
 
 ## Status
 
-**Phase 0: Planning** (PRD complete — simulation-scoped)
+**Phase 1: SITL + Swarm Manager** (In Progress)
 
-See [PRD.md](PRD.md) for full product requirements.
+- ✅ Phase 0: Planning complete (PRD written, architecture finalized)
+- 🔨 Phase 1: Core Swarm Manager implemented, SITL integration pending
+  - ✅ Project structure created
+  - ✅ Swarm Manager (FastAPI server, drone registry, command router)
+  - ✅ MCP tools definition for OpenClaw integration
+  - ✅ Configuration files (SITL, AirSim)
+  - ✅ Launch scripts and setup documentation
+  - ⏳ ArduPilot SITL installation (environment setup)
+  - ⏳ First successful voice-controlled takeoff
+
+See [PRD.md](PRD.md) for full product requirements and [SETUP.md](SETUP.md) for installation instructions.
 
 ---
 
@@ -62,9 +72,28 @@ Unreal Engine 5 (AirSim)
 
 ---
 
-## Setup (Coming Soon)
+## Quick Start
 
-Installation instructions for AirSim + Unreal Engine + YOLOv8 will be added as Phase 1 progresses.
+### Prerequisites
+- Python 3.9+
+- ArduPilot SITL installed (see [SETUP.md](SETUP.md))
+- MAVSDK-Python
+
+### Launch Single Drone Test
+
+```bash
+# Terminal 1: Start SITL
+export ARDUPILOT_PATH=~/ardupilot
+./scripts/launch_sitl.sh
+
+# Terminal 2: Start Swarm Manager
+./scripts/start_swarm_manager.sh
+
+# Terminal 3: Test drone control
+./scripts/test_single_drone.sh
+```
+
+For detailed setup instructions, see [SETUP.md](SETUP.md).
 
 ---
 

@@ -1,0 +1,180 @@
+{
+  "name": "autom8te-swarm",
+  "version": "0.1.0",
+  "description": "Voice-controlled drone swarm control via MAVSDK",
+  "server_url": "http://localhost:8000",
+  
+  "tools": [
+    {
+      "name": "drone_register",
+      "description": "Register a new drone with the swarm manager (establishes MAVSDK connection)",
+      "endpoint": "/tools/drone_register",
+      "method": "POST",
+      "parameters": {
+        "drone_id": {
+          "type": "string",
+          "description": "Unique drone identifier (e.g., drone_1, drone_2)",
+          "required": true
+        },
+        "connection_string": {
+          "type": "string",
+          "description": "MAVSDK connection string (e.g., udp://:14550)",
+          "required": true
+        }
+      }
+    },
+    
+    {
+      "name": "drone_takeoff",
+      "description": "Make drone take off to specified altitude",
+      "endpoint": "/tools/drone_takeoff",
+      "method": "POST",
+      "parameters": {
+        "drone_id": {
+          "type": "string",
+          "description": "Target drone ID (drone_1, drone_2, drone_3, drone_4)",
+          "required": true
+        },
+        "altitude_m": {
+          "type": "number",
+          "description": "Target altitude in meters (default: 5.0)",
+          "required": false,
+          "default": 5.0
+        }
+      }
+    },
+    
+    {
+      "name": "drone_land",
+      "description": "Land drone at current position",
+      "endpoint": "/tools/drone_land",
+      "method": "POST",
+      "parameters": {
+        "drone_id": {
+          "type": "string",
+          "description": "Target drone ID",
+          "required": true
+        }
+      }
+    },
+    
+    {
+      "name": "drone_move",
+      "description": "Move drone to NED coordinates (North-East-Down relative to home)",
+      "endpoint": "/tools/drone_move",
+      "method": "POST",
+      "parameters": {
+        "drone_id": {
+          "type": "string",
+          "description": "Target drone ID",
+          "required": true
+        },
+        "north_m": {
+          "type": "number",
+          "description": "Meters north of home position",
+          "required": true
+        },
+        "east_m": {
+          "type": "number",
+          "description": "Meters east of home position",
+          "required": true
+        },
+        "down_m": {
+          "type": "number",
+          "description": "Meters down from home (negative = up, e.g., -10 = 10m altitude)",
+          "required": true
+        },
+        "yaw_deg": {
+          "type": "number",
+          "description": "Target yaw in degrees (0-360, optional)",
+          "required": false,
+          "default": 0.0
+        }
+      }
+    },
+    
+    {
+      "name": "drone_velocity",
+      "description": "Set drone velocity vector (NED frame)",
+      "endpoint": "/tools/drone_velocity",
+      "method": "POST",
+      "parameters": {
+        "drone_id": {
+          "type": "string",
+          "description": "Target drone ID",
+          "required": true
+        },
+        "vx_ms": {
+          "type": "number",
+          "description": "North velocity in m/s",
+          "required": true
+        },
+        "vy_ms": {
+          "type": "number",
+          "description": "East velocity in m/s",
+          "required": true
+        },
+        "vz_ms": {
+          "type": "number",
+          "description": "Down velocity in m/s (negative = climb)",
+          "required": true
+        },
+        "yaw_rate_degs": {
+          "type": "number",
+          "description": "Yaw rate in degrees/second (optional)",
+          "required": false,
+          "default": 0.0
+        }
+      }
+    },
+    
+    {
+      "name": "drone_return_home",
+      "description": "Command drone to return to launch position and land",
+      "endpoint": "/tools/drone_return_home",
+      "method": "POST",
+      "parameters": {
+        "drone_id": {
+          "type": "string",
+          "description": "Target drone ID",
+          "required": true
+        }
+      }
+    },
+    
+    {
+      "name": "drone_query",
+      "description": "Get drone telemetry (position, orientation, battery, task status)",
+      "endpoint": "/tools/drone_query",
+      "method": "POST",
+      "parameters": {
+        "drone_id": {
+          "type": "string",
+          "description": "Target drone ID",
+          "required": true
+        }
+      }
+    },
+    
+    {
+      "name": "drone_broadcast",
+      "description": "Send command to all registered drones",
+      "endpoint": "/tools/drone_broadcast",
+      "method": "POST",
+      "parameters": {
+        "command": {
+          "type": "string",
+          "description": "Command to broadcast (takeoff, land, return_home)",
+          "required": true,
+          "enum": ["takeoff", "land", "return_home"]
+        },
+        "altitude_m": {
+          "type": "number",
+          "description": "Altitude for takeoff command (optional, default: 5.0)",
+          "required": false,
+          "default": 5.0
+        }
+      }
+    }
+  ]
+}
