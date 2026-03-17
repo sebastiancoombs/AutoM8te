@@ -1,8 +1,8 @@
 # AutoM8te - Product Requirements Document
 
-**Version:** 0.2  
+**Version:** 0.3  
 **Date:** March 12, 2026  
-**Status:** Simulation-Focused Draft  
+**Status:** Architecture Finalized  
 **Scope:** Simulation validation only — hardware implementation deferred to future phase
 
 ---
@@ -15,7 +15,8 @@ Core principles:
 - **One brain, multiple bodies** — All intelligence lives on ground station, drones are simulated actuators
 - **Object-aware intelligence** — Track and follow any object (people, cars, animals) via YOLO + CV
 - **Skills-based flexibility** — New capabilities added as OpenClaw skills, not hardcoded features
-- **Prove in simulation first** — Validate all behaviors in AirSim before considering hardware
+- **Hardware-in-the-loop ready** — Control via MAVSDK → ArduPilot SITL (identical interface for real hardware)
+- **Prove in simulation first** — Validate all behaviors before considering hardware
 
 ---
 
@@ -36,28 +37,80 @@ Current drone control requires:
 ## Core Architecture
 
 ```
-┌────────────────────────────────────────────┐
-│         Ground Station (OpenClaw)          │
-│                                            │
-│  Voice Input → Intent Recognition          │
-│  Video Feeds → YOLO + CV Pipeline          │
-│  Skills Layer → Control Generation         │
-│  Audio Output → TTS Feedback               │
-└────────────────────────────────────────────┘
-                    ↕ (AirSim API)
-┌─────────────────────────────────────────────┐
-│           AirSim (Unreal Engine)            │
-│                                             │
-│  ┌──────────┬──────────┬──────────────┐    │
-│  │ Drone 1  │ Drone 2  │ Drone 3 & 4  │    │
-│  │ Camera   │ Camera   │ Cameras      │    │
-│  │ Physics  │ Physics  │ Physics      │    │
-│  └──────────┴──────────┴──────────────┘    │
-│                                             │
-│  Environment: Urban scene with cars,        │
-│              people, buildings              │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│          OpenClaw Ground Station                    │
+│  - Voice I/O (STT/TTS via ElevenLabs)               │
+│  - Intent recognition (LLM)                         │
+│  - Skills orchestration                             │
+│  - Video analysis (YOLO pipeline)                   │
+└────────────────────┬────────────────────────────────┘
+                     │ (MCP Server interface)
+                     ↓
+┌─────────────────────────────────────────────────────┐
+│         Swarm Manager (Python/FastAPI)              │
+│                                                     │
+│  ┌───────────────────────────────────────────────┐ │
+│  │ Drone Registry                                │ │
+│  │  - drone_1: MAVSDK conn, position, task       │ │
+│  │  - drone_2: MAVSDK conn, position, task       │ │
+│  │  - drone_3, drone_4: ...                      │ │
+│  └───────────────────────────────────────────────┘ │
+│                                                     │
+│  ┌───────────────────────────────────────────────┐ │
+│  │ Command Router                                │ │
+│  │  - Parse: "Drone 2, follow car"               │ │
+│  │  - Route to MAVSDK connection                 │ │
+│  └───────────────────────────────────────────────┘ │
+│                                                     │
+│  ┌───────────────────────────────────────────────┐ │
+│  │ Object Tracker (YOLO + DeepSORT)              │ │
+│  │  - Detect objects from AirSim feeds           │ │
+│  │  - Maintain IDs across frames                 │ │
+│  └───────────────────────────────────────────────┘ │
+│                                                     │
+│  ┌───────────────────────────────────────────────┐ │
+│  │ Collision Avoidance                           │ │
+│  │  - Track all drone positions                  │ │
+│  │  - Override commands if risk detected         │ │
+│  └───────────────────────────────────────────────┘ │
+└────────────────────┬────────────────────────────────┘
+                     │ (MAVSDK-Python)
+                     ↓
+┌─────────────────────────────────────────────────────┐
+│     ArduPilot SITL Instances (Flight Controllers)   │
+│                                                     │
+│  SITL-1 (UDP 14550) ← Drone 1 MAVLink commands     │
+│  SITL-2 (UDP 14560) ← Drone 2 MAVLink commands     │
+│  SITL-3 (UDP 14570) ← Drone 3 MAVLink commands     │
+│  SITL-4 (UDP 14580) ← Drone 4 MAVLink commands     │
+│                                                     │
+│  (Computes flight physics, sensors, state)          │
+└────────────────────┬────────────────────────────────┘
+                     │ (MAVLink telemetry)
+                     ↓
+┌─────────────────────────────────────────────────────┐
+│          AirSim (Unreal Engine 5)                   │
+│  - Reads SITL state via MAVLink                     │
+│  - Renders drone positions in 3D                    │
+│  - Provides camera feeds → YOLO                     │
+│  - Spawns objects (cars, people, obstacles)         │
+└─────────────────────────────────────────────────────┘
 ```
+
+### Design Decision: MAVSDK → SITL → AirSim
+
+**Why this architecture?**
+- **MAVSDK-Python** = Same API for sim and real hardware (zero code changes)
+- **ArduPilot SITL** = Real flight controller code (identical to Cube/Pixhawk firmware)
+- **AirSim** = Visualization only (physics computed by SITL, not AirSim)
+- **Hardware-ready:** Swap SITL for real flight controller → instant hardware migration
+
+**Control flow:**
+1. OpenClaw intent → Swarm Manager (MCP tools)
+2. Swarm Manager → MAVSDK-Python → MAVLink commands
+3. ArduPilot SITL → Computes flight physics
+4. AirSim → Reads SITL telemetry, renders scene
+5. AirSim camera feeds → YOLO → Object detections → Swarm Manager
 
 ### Design Decision: Simulation-First
 
@@ -71,7 +124,7 @@ Current drone control requires:
 **Why AirSim specifically?**
 - ✅ Unreal Engine rendering (best CV quality)
 - ✅ Multiple camera views per drone
-- ✅ Python API for control
+- ✅ MAVLink support (connects to ArduPilot SITL)
 - ✅ Supports object spawning (cars, people, obstacles)
 - ✅ Multi-drone support out of the box
 
@@ -85,70 +138,266 @@ Current drone control requires:
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
 | **Orchestration** | OpenClaw | Skills-based, LLM integration, proven runtime |
-| **Language** | Python | Best drone + CV libraries |
+| **Swarm Manager** | FastAPI + Python | Async-friendly, MCP server interface |
+| **Drone Control** | MAVSDK-Python | Industry standard, identical API for sim/real hardware |
+| **MCP Interface** | Custom MCP Server | Exposes tools to OpenClaw (takeoff, move, query, etc.) |
 | **Object Detection** | YOLOv8 | Fast, accurate, multi-class detection (people, cars, animals) |
+| **Object Tracking** | DeepSORT | Appearance-based tracking, maintains IDs across frames |
 | **Computer Vision** | MediaPipe | Pose + gesture detection (supplementary to YOLO) |
 | **Voice I/O** | ElevenLabs API | High quality STT/TTS, low latency |
-| **Simulation Control** | AirSim Python API | Direct control, telemetry, camera access |
 | **Video Processing** | OpenCV | Frame capture, pre-processing for YOLO |
 
 ### Simulation Environment
-- **AirSim** — Unreal Engine-based drone simulator
+- **ArduPilot SITL** — Flight controller simulation (one instance per drone)
+- **AirSim** — Unreal Engine-based 3D renderer + camera feeds
 - **Unreal Engine 5** — Photorealistic rendering for CV
-- **Python API** — Control interface (waypoints, velocity, camera)
-- **Multi-drone support** — Native in AirSim settings
+- **MAVLink** — Communication protocol (SITL ↔ AirSim)
+
+---
+
+## Project Structure
+
+```
+AutoM8te/
+├── swarm_manager/
+│   ├── __init__.py
+│   ├── server.py          # FastAPI app (MCP server)
+│   ├── drone_registry.py  # Drone state tracking (MAVSDK connections)
+│   ├── command_router.py  # Intent → MAVSDK commands
+│   ├── collision.py       # Collision avoidance logic
+│   ├── object_tracker.py  # YOLO + DeepSORT pipeline
+│   └── mavsdk_wrapper.py  # MAVSDK connection pool
+├── openclaw_tools/
+│   ├── mcp_server.py      # MCP server for OpenClaw
+│   └── tools.json         # Tool definitions
+├── config/
+│   ├── sitl_config.yaml   # SITL instances (ports, IDs)
+│   └── airsim_settings.json  # AirSim multi-drone config
+├── skills/
+│   ├── follow_object/     # OpenClaw skill: follow detected object
+│   ├── patrol_route/      # OpenClaw skill: waypoint navigation
+│   ├── formation_flight/  # OpenClaw skill: multi-drone formation
+│   └── search_pattern/    # OpenClaw skill: area coverage
+├── scripts/
+│   ├── launch_sitl.sh     # Start all 4 SITL instances
+│   ├── setup_airsim.sh    # Configure AirSim environment
+│   └── test_yolo.py       # YOLO detection test script
+├── tests/
+│   └── ...                # Unit + integration tests
+├── PRD.md                 # This document
+└── README.md              # Setup instructions
+```
 
 ---
 
 ## Core Components
 
-### 1. Drone Swarm Manager (Custom Service)
+### 1. Swarm Manager (Python FastAPI Service)
 
-**Drone Registry:**
-- Tracks state of N drones (ID, position, orientation, task, camera feed)
-- Updates telemetry from AirSim API (position, velocity, collision state)
+**Purpose:** Centralized drone coordination layer between OpenClaw and ArduPilot SITL.
 
-**Command Router:**
-- Parses intent: "Drone 2, follow that car" → `{target: "drone_2", action: "follow", object: "car"}`
-- Routes to specific drone or broadcasts to all
-- Handles addressing modes: individual, group, broadcast
-
-**Collision Avoidance:**
-- Tracks positions of all active drones via AirSim telemetry
-- Predicts movement paths
-- Overrides commands if collision risk detected (5m minimum separation)
-
-**Object Tracker:**
-- Maintains registry of detected objects (ID, class, position, velocity)
-- Associates OpenClaw intent with YOLO detections
-- Resolves ambiguity ("that car" → which car? closest? pointed at?)
-
-### 2. OpenClaw Integration
-
-**Custom Tools (to build):**
+**Drone Registry** (`drone_registry.py`):
 ```python
-drone_move(drone_id, x, y, z, yaw)  # Move to position (NED coords)
-drone_velocity(drone_id, vx, vy, vz)  # Set velocity vector
-drone_query(drone_id)  # Read telemetry (position, orientation, collision state)
-drone_broadcast(command)  # Send to all drones
-detect_objects(drone_id, classes=["car", "person"])  # YOLO detection from camera
-track_object(drone_id, object_id)  # Follow specific detected object
+from dataclasses import dataclass
+from mavsdk import System
+
+@dataclass
+class DroneState:
+    id: str                      # drone_1, drone_2, etc.
+    mavsdk: System               # MAVSDK connection
+    position: tuple              # (north, east, down) in meters
+    orientation: tuple           # (roll, pitch, yaw) in degrees
+    tracking_object_id: str | None  # Object being tracked
+    collision_risk: bool         # Collision avoidance flag
+
+class DroneRegistry:
+    def __init__(self):
+        self.drones = {}  # id → DroneState
+    
+    async def register(self, drone_id: str, port: int):
+        """Connect to SITL instance via MAVSDK"""
+        drone = System()
+        await drone.connect(system_address=f"udp://:{port}")
+        self.drones[drone_id] = DroneState(...)
+    
+    async def update_telemetry(self, drone_id: str):
+        """Fetch latest position/orientation from SITL"""
+        # Read telemetry via MAVSDK
 ```
 
-**Skills (examples):**
-- `follow-object` — YOLO tracks object (car, person, animal), drone maintains follow distance
-- `patrol-route` — Autonomous waypoint navigation in AirSim environment
-- `formation-flight` — Multi-drone coordination with relative positioning
-- `search-pattern` — Coverage algorithm, coordinate multiple drones
-- `orbit-object` — Circle around detected object at fixed radius
+**Command Router** (`command_router.py`):
+```python
+class CommandRouter:
+    def __init__(self, registry: DroneRegistry):
+        self.registry = registry
+    
+    async def takeoff(self, drone_id: str, altitude_m: float = 5.0):
+        """Send takeoff command to SITL via MAVSDK"""
+        drone = self.registry.drones[drone_id]
+        await drone.mavsdk.action.set_takeoff_altitude(altitude_m)
+        await drone.mavsdk.action.arm()
+        await drone.mavsdk.action.takeoff()
+    
+    async def move(self, drone_id: str, north: float, east: float, down: float, yaw: float = 0):
+        """Move drone to NED coordinates"""
+        drone = self.registry.drones[drone_id]
+        await drone.mavsdk.action.goto_location(north, east, down, yaw)
+    
+    async def velocity(self, drone_id: str, vx: float, vy: float, vz: float, yaw_rate: float = 0):
+        """Set velocity vector"""
+        drone = self.registry.drones[drone_id]
+        await drone.mavsdk.offboard.set_velocity_ned(vx, vy, vz, yaw_rate)
+    
+    async def broadcast(self, command: str):
+        """Send command to all drones (takeoff, land, return_home)"""
+        for drone_id in self.registry.drones:
+            await getattr(self, command)(drone_id)
+```
+
+**Collision Avoidance** (`collision.py`):
+- Tracks positions of all active drones
+- Predicts movement paths (velocity vectors)
+- Overrides commands if collision risk detected (5m minimum separation)
+- Logs all overrides for analysis
+
+**Object Tracker** (`object_tracker.py`):
+- Runs YOLOv8 on AirSim camera feeds
+- Maintains object registry (ID, class, bounding box, position, velocity)
+- Uses DeepSORT for appearance-based tracking (maintains IDs across occlusion)
+- Associates OpenClaw intent with YOLO detections
+
+---
+
+### 2. OpenClaw Integration (MCP Server)
+
+**MCP Tools Exposed to OpenClaw:**
+
+```json
+{
+  "tools": [
+    {
+      "name": "drone_takeoff",
+      "description": "Make drone take off to specified altitude",
+      "parameters": {
+        "drone_id": "string (drone_1, drone_2, drone_3, drone_4)",
+        "altitude_m": "number (default: 5.0)"
+      }
+    },
+    {
+      "name": "drone_land",
+      "description": "Land drone at current position",
+      "parameters": {
+        "drone_id": "string"
+      }
+    },
+    {
+      "name": "drone_move",
+      "description": "Move drone to NED coordinates (North-East-Down)",
+      "parameters": {
+        "drone_id": "string",
+        "north_m": "number (meters north of home)",
+        "east_m": "number (meters east of home)",
+        "down_m": "number (negative = altitude, e.g., -10 = 10m altitude)",
+        "yaw_deg": "number (optional, 0-360)"
+      }
+    },
+    {
+      "name": "drone_velocity",
+      "description": "Set drone velocity vector",
+      "parameters": {
+        "drone_id": "string",
+        "vx_ms": "number (north velocity in m/s)",
+        "vy_ms": "number (east velocity in m/s)",
+        "vz_ms": "number (down velocity in m/s, negative = climb)",
+        "yaw_rate_degs": "number (optional, degrees/second)"
+      }
+    },
+    {
+      "name": "drone_query",
+      "description": "Get drone telemetry (position, orientation, battery, etc.)",
+      "parameters": {
+        "drone_id": "string"
+      }
+    },
+    {
+      "name": "detect_objects",
+      "description": "Run YOLO detection on drone camera feed",
+      "parameters": {
+        "drone_id": "string",
+        "classes": "array (optional: ['car', 'person', 'dog'], defaults to all 80 YOLO classes)"
+      }
+    },
+    {
+      "name": "track_object",
+      "description": "Follow detected object with drone",
+      "parameters": {
+        "drone_id": "string",
+        "object_id": "string (from detect_objects)",
+        "follow_distance_m": "number (default: 8.0)",
+        "follow_mode": "string (behind | above | orbit)"
+      }
+    },
+    {
+      "name": "drone_broadcast",
+      "description": "Send command to all drones",
+      "parameters": {
+        "command": "string (takeoff | land | return_home)"
+      }
+    }
+  ]
+}
+```
+
+**MCP Server Implementation** (`openclaw_tools/mcp_server.py`):
+```python
+from fastapi import FastAPI
+from swarm_manager.drone_registry import DroneRegistry
+from swarm_manager.command_router import CommandRouter
+
+app = FastAPI()
+registry = DroneRegistry()
+router = CommandRouter(registry)
+
+@app.post("/tools/drone_takeoff")
+async def drone_takeoff(drone_id: str, altitude_m: float = 5.0):
+    await router.takeoff(drone_id, altitude_m)
+    return {"status": "success", "message": f"{drone_id} taking off to {altitude_m}m"}
+
+@app.post("/tools/drone_query")
+async def drone_query(drone_id: str):
+    await registry.update_telemetry(drone_id)
+    drone = registry.drones[drone_id]
+    return {
+        "drone_id": drone_id,
+        "position": {"north": drone.position[0], "east": drone.position[1], "down": drone.position[2]},
+        "orientation": {"roll": drone.orientation[0], "pitch": drone.orientation[1], "yaw": drone.orientation[2]},
+        "tracking": drone.tracking_object_id
+    }
+
+# ... (other tool endpoints)
+```
+
+**OpenClaw MCP Skill Configuration:**
+```json
+{
+  "name": "autom8te-swarm",
+  "server": "http://localhost:8000",
+  "tools": [
+    "drone_takeoff", "drone_land", "drone_move", "drone_velocity",
+    "drone_query", "detect_objects", "track_object", "drone_broadcast"
+  ]
+}
+```
+
+---
 
 ### 3. Computer Vision Pipeline
 
-**Input:** AirSim camera feed (RGB images, 30+ fps, 1080p)  
+**Input:** AirSim camera feeds (RGB images, 30+ fps, 1080p)  
 **Processing Pipeline:**
 1. **YOLO v8** — Object detection (80+ classes: person, car, truck, dog, etc.)
-2. **MediaPipe** (optional) — Pose/gesture for human interaction
-3. **Object Tracking** — Maintain ID across frames (SORT/DeepSORT)
+2. **DeepSORT** — Appearance-based tracking (maintains object IDs across frames)
+3. **MediaPipe** (optional) — Pose/gesture for human interaction
 4. **Spatial Positioning** — Estimate 3D position from bounding box + camera intrinsics
 
 **Output:** List of detected objects with:
@@ -158,15 +407,38 @@ track_object(drone_id, object_id)  # Follow specific detected object
 - Tracking ID (persistent across frames)
 - Estimated 3D position (relative to drone)
 
-**Example Use Cases:**
-- "Follow that car" → YOLO detects cars, user points or specifies ("red car"), drone tracks
-- "Circle around that person" → YOLO + MediaPipe detects person, drone orbits
-- "Avoid all obstacles" → YOLO detects objects, collision avoidance uses positions
+**Object Selection Logic (Conversational Disambiguation):**
+
+When user says **"Follow that car"** and YOLO detects 5 cars:
+
+1. **Swarm Manager** returns list of detected cars to OpenClaw:
+   ```json
+   [
+     {"id": "car_1", "class": "car", "color": "red", "position": "10 o'clock"},
+     {"id": "car_2", "class": "car", "color": "blue", "position": "2 o'clock"},
+     {"id": "car_3", "class": "car", "color": "white", "position": "12 o'clock"}
+   ]
+   ```
+
+2. **OpenClaw (voice):** *"I see 3 cars — a red sedan at 10 o'clock, blue truck at 2 o'clock, white SUV straight ahead. Which one?"*
+
+3. **User:** "The red sedan"
+
+4. **OpenClaw** → Calls `track_object(drone_id="drone_1", object_id="car_1")`
+
+5. **Swarm Manager** → Locks onto `car_1`, begins following
+
+**Fallback logic:**
+- If only 1 object of specified class → Auto-select (no ambiguity)
+- If user says "closest" → Pick nearest by distance
+- If user says "front" / "left" / "right" → Spatial reasoning
+
+---
 
 ### 4. Voice Interface
 
 **Input:** Ground station mic → ElevenLabs STT  
-**Processing:** OpenClaw LLM parses intent, routes to skill  
+**Processing:** OpenClaw LLM parses intent, routes to MCP tool  
 **Output:** TTS audio → ground station speakers (for simulation)
 
 **Addressing modes:**
@@ -175,8 +447,8 @@ track_object(drone_id, object_id)  # Follow specific detected object
 - **"Scout team, patrol north"** → Group addressing (Drones 1-3)
 
 **Feedback loop:**
-- User command → OpenClaw processes → skill executes → TTS response
-- Response format: "[Drone 2]: Following red sedan"
+- User command → OpenClaw processes → MCP tool call → MAVSDK → SITL
+- Response format: "[Drone 2]: Following red sedan, 8 meters behind"
 - Console logging for debugging, audio feedback for natural interaction
 
 ---
@@ -184,28 +456,35 @@ track_object(drone_id, object_id)  # Follow specific detected object
 ## Development Phases
 
 ### Phase 0: Repository Setup ✅
-- Create GitHub repo
-- Write PRD (this document)
-- Define architecture
-- Choose tech stack
+- [x] Create GitHub repo
+- [x] Write PRD (this document)
+- [x] Define architecture
+- [x] Choose tech stack
 
-### Phase 1: AirSim + Basic Control (Week 1-2)
-**Goal:** Single drone responds to voice commands in AirSim.
+### Phase 1: SITL + AirSim + Basic Control (Week 1-2)
+**Goal:** Single drone responds to voice commands via MAVSDK → SITL → AirSim.
 
 **Tasks:**
+- Install ArduPilot SITL (one instance, UDP 14550)
+- Install MAVSDK-Python
 - Install AirSim + Unreal Engine 5
-- Configure urban environment (Blocks or City scene)
-- Connect OpenClaw to AirSim Python API
-- Voice command: "Take off" → drone takes off
+- Configure AirSim to connect to SITL via MAVLink
+- Build minimal Swarm Manager (FastAPI server with 3 tools: takeoff, move, land)
+- Configure OpenClaw MCP skill pointing to Swarm Manager
+- Voice command: "Take off" → drone takes off in AirSim
 - Voice command: "Move forward 10 meters" → drone moves
 - Voice command: "Land" → drone lands
-- Verify telemetry reads correctly (position, orientation, collision state)
+- Verify telemetry reads correctly (position, orientation)
 
 **Success criteria:**
-- [ ] OpenClaw routes voice commands to AirSim API calls
-- [ ] Drone responds correctly in simulation
+- [ ] SITL instance runs and accepts MAVSDK commands
+- [ ] AirSim renders drone position from SITL telemetry
+- [ ] OpenClaw routes voice commands → MCP tools → MAVSDK → SITL
+- [ ] Drone responds correctly in AirSim (takeoff, move, land)
 - [ ] Telemetry visible in logs
-- [ ] Camera feed accessible from Python
+- [ ] Camera feed accessible from AirSim
+
+**Performance benchmark:** Test with 1 drone, then 2, then 4 (measure FPS, identify bottlenecks early).
 
 ### Phase 2: YOLO Object Detection (Week 3-4)
 **Goal:** Drone detects and identifies objects in AirSim environment.
@@ -214,28 +493,32 @@ track_object(drone_id, object_id)  # Follow specific detected object
 - Integrate YOLOv8 with AirSim camera feed
 - Spawn objects in AirSim (cars, people, obstacles)
 - Test detection: verify YOLO correctly identifies spawned objects
-- Implement object tracking (maintain ID across frames)
+- Implement DeepSORT object tracking (maintain ID across frames)
 - Display bounding boxes + labels in debug view
+- Add `detect_objects` MCP tool
+- Test conversational disambiguation: "Follow that car" with 5 cars visible
 
 **Success criteria:**
-- [ ] YOLO detects cars, people, obstacles in AirSim renders
-- [ ] Detection runs at 20+ fps (fast enough for control)
-- [ ] Object IDs persist across frames (tracking works)
-- [ ] False positive rate <10% (reliable detection)
+- [ ] YOLO detects cars, people, obstacles in AirSim renders (>90% accuracy)
+- [ ] Detection runs at 20+ fps (real-time)
+- [ ] Object IDs persist across frames (DeepSORT tracking works)
+- [ ] False positive rate <10%
+- [ ] OpenClaw can query detected objects and disambiguate via voice
 
 ### Phase 3: Follow-Object Behavior (Week 5-6)
 **Goal:** Drone tracks and follows detected objects via voice command.
 
 **Tasks:**
-- Voice command: "Follow that car" → drone identifies closest car, begins following
+- Voice command: "Follow that car" → OpenClaw disambiguates, drone locks on
 - Implement PID control: keep object centered in frame
 - Maintain safe distance (5-10m behind object)
 - Handle object loss (car drives behind building → drone hovers, waits)
 - Test with moving vehicles in AirSim
+- Add `track_object` MCP tool
 
 **Success criteria:**
 - [ ] Drone locks onto specified object (car, person, etc.)
-- [ ] Maintains follow distance without oscillation
+- [ ] Maintains follow distance without oscillation (<1m position error)
 - [ ] Recovers when object temporarily occluded
 - [ ] Voice command switches targets: "Follow that person instead"
 
@@ -243,7 +526,8 @@ track_object(drone_id, object_id)  # Follow specific detected object
 **Goal:** Control 4 drones independently in same AirSim environment.
 
 **Tasks:**
-- Spawn 4 drones in AirSim (configured via settings.json)
+- Launch 4 SITL instances (UDP 14550, 14560, 14570, 14580)
+- Configure AirSim for 4 drones (settings.json)
 - Implement Drone Registry (track state of each)
 - Test individual addressing: "Drone 2, follow that car"
 - Test broadcast: "All drones, land"
@@ -251,7 +535,7 @@ track_object(drone_id, object_id)  # Follow specific detected object
 - Test: send two drones toward same target, verify avoidance
 
 **Success criteria:**
-- [ ] All 4 drones controllable independently
+- [ ] All 4 drones controllable independently via MAVSDK
 - [ ] Addressing works correctly (individual, broadcast, group)
 - [ ] Collision avoidance prevents simulated crashes
 - [ ] Each drone can track different objects simultaneously
@@ -278,10 +562,11 @@ track_object(drone_id, object_id)  # Follow specific detected object
 ### Typical Use Case: 3-Drone Object Tracking in AirSim
 
 **Setup:**
-1. Launch AirSim with urban environment
-2. Start OpenClaw ground station
-3. Spawn 3 drones in simulation
-4. Spawn traffic (cars, pedestrians)
+1. Launch 3 SITL instances (ArduPilot)
+2. Start AirSim with urban environment
+3. Start Swarm Manager (FastAPI server)
+4. Start OpenClaw ground station
+5. Spawn traffic in AirSim (cars, pedestrians)
 
 **Mission:**
 1. **Operator:** "All drones, take off"  
@@ -289,33 +574,36 @@ track_object(drone_id, object_id)  # Follow specific detected object
    **Feedback:** "All drones airborne"
 
 2. **Operator:** "Drone 1, follow that red car"  
-   **System:** [YOLO detects cars, identifies red vehicle, Drone 1 locks on]  
+   **System:** [YOLO detects 5 cars]  
+   **OpenClaw:** "I see 5 cars — red sedan at 10 o'clock, blue truck at 2 o'clock, white SUV straight ahead, gray van at 4 o'clock, black coupe at 8 o'clock. Which one?"  
+   **Operator:** "The red sedan"  
+   **System:** [Drone 1 locks on via MAVSDK]  
    **Drone 1:** "Following red sedan, maintaining 8 meters"
 
 3. **Operator:** "Drone 2, circle around that person"  
-   **System:** [YOLO + MediaPipe detect person, Drone 2 begins orbit at 10m radius]  
-   **Drone 2:** "Orbiting target, 360 coverage active"
+   **System:** [YOLO + MediaPipe detect person, Drone 2 begins orbit]  
+   **Drone 2:** "Orbiting target, 10 meter radius"
 
 4. **Operator:** "Drone 3, patrol between waypoints Alpha and Bravo"  
-   **System:** [Drone 3 flies predetermined route]  
+   **System:** [Drone 3 flies predetermined route via MAVSDK]  
    **Drone 3:** "Patrol active"
 
 5. [Red car turns corner, drives behind building]  
    **Drone 1:** "Target occluded, holding position"  
-   [Car emerges 5 seconds later]  
+   [Car emerges 5 seconds later, DeepSORT re-identifies]  
    **Drone 1:** "Target reacquired, resuming follow"
 
 6. **Operator:** "Drone 1, switch to that blue truck instead"  
-   **System:** [YOLO re-targets, Drone 1 switches to blue truck]  
+   **System:** [YOLO re-targets, Drone 1 switches via MAVSDK]  
    **Drone 1:** "Now following blue pickup truck"
 
 7. **Operator:** "All drones, land at home position"  
-   **System:** [All drones return to launch coordinates, land sequentially]  
+   **System:** [All drones return to launch coordinates via MAVSDK, land sequentially]  
    **Feedback:** "All drones landed"
 
 **Key UX principles:**
 - Voice is primary interface
-- Object recognition enables natural commands ("that car", "the person")
+- Conversational disambiguation for ambiguous targets
 - Autonomous tracking with proactive status updates
 - Graceful handling of edge cases (occlusion, object loss)
 - Multi-drone coordination without operator micromanagement
@@ -324,29 +612,32 @@ track_object(drone_id, object_id)  # Follow specific detected object
 
 ## Success Criteria (Simulation Only)
 
-### Phase 1: AirSim + Basic Control
-- [ ] Voice command makes drone take off in AirSim
+### Phase 1: SITL + AirSim + Basic Control
+- [ ] SITL instance runs and accepts MAVSDK commands
+- [ ] Voice command makes drone take off in AirSim (via MAVSDK → SITL)
 - [ ] Voice command moves drone to specific coordinates
 - [ ] Voice command lands drone
-- [ ] Telemetry reads correctly (position, orientation, collision state)
-- [ ] Camera feed accessible and displays AirSim renders
+- [ ] Telemetry reads correctly (position, orientation)
+- [ ] Camera feed accessible from AirSim
+- [ ] Performance test: 4 drones in AirSim at 30+ fps
 
 ### Phase 2: YOLO Object Detection
 - [ ] YOLO detects cars in AirSim environment (>90% accuracy)
 - [ ] YOLO detects people in AirSim environment (>90% accuracy)
 - [ ] Detection runs at 20+ fps (real-time)
-- [ ] Object tracking maintains IDs across frames
+- [ ] DeepSORT maintains object IDs across frames
 - [ ] False positive rate <10%
+- [ ] Conversational disambiguation works (5 cars → user specifies "red sedan")
 
 ### Phase 3: Follow-Object Behavior
-- [ ] Voice: "Follow that car" → drone locks onto closest car
+- [ ] Voice: "Follow that car" → OpenClaw disambiguates, drone locks on
 - [ ] Drone maintains 5-10m follow distance
 - [ ] PID control prevents oscillation (<1m position error)
-- [ ] Drone handles object occlusion (waits, resumes)
+- [ ] Drone handles object occlusion (waits, resumes when reacquired)
 - [ ] Voice: "Follow that person instead" → switches targets correctly
 
 ### Phase 4: Multi-Drone Coordination
-- [ ] 4 drones spawn in AirSim without collision
+- [ ] 4 SITL instances + 4 drones in AirSim (no collisions)
 - [ ] Individual addressing: "Drone 2, take off" (others stay grounded)
 - [ ] Broadcast: "All drones, land" (all execute)
 - [ ] Collision avoidance: 2 drones sent toward same point → maintain 5m separation
@@ -382,23 +673,29 @@ track_object(drone_id, object_id)  # Follow specific detected object
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| **YOLO false positives** (detects non-existent objects) | High | Confidence threshold tuning, secondary validation (tracking consistency) |
-| **AirSim performance** (low fps, stuttering) | High | Reduce graphics quality, use simpler environment, upgrade GPU if needed |
+| **YOLO false positives** (detects non-existent objects) | High | Confidence threshold tuning, DeepSORT appearance validation |
+| **SITL + AirSim performance** (low fps, stuttering) | High | Benchmark in Phase 1 (1/2/4 drones), reduce AirSim graphics quality if needed |
 | **Object tracking loss** (ID switches between frames) | Medium | Use DeepSORT (appearance-based), not just IOU matching |
 | **Collision avoidance false positives** | Medium | Conservative min distance (5m), log all overrides for analysis |
 | **Skills conflict** (two skills want control) | Medium | Priority system (safety > autonomous > idle), skill orchestration layer |
-| **AirSim API limitations** | Medium | Test early, fall back to ROS bridge if Python API insufficient |
+| **MAVSDK API limitations** | Low | MAVSDK is mature, well-documented; fall back to direct MAVLink if needed |
 | **Unreal Engine crashes** | Low | Save environment frequently, automate scene setup via scripts |
 
 ---
 
+## Resolved Design Questions
+
+1. **Swarm Manager architecture:** ✅ FastAPI + MAVSDK + MCP server
+2. **Control flow:** ✅ OpenClaw → MAVSDK → ArduPilot SITL → AirSim (render only)
+3. **Object selection ambiguity:** ✅ Conversational disambiguation via OpenClaw voice
+4. **Skills coordination:** ✅ Priority system (safety > autonomous > idle) in Swarm Manager
+5. **Object tracking:** ✅ DeepSORT (appearance-based, handles occlusion better than IOU)
+
 ## Open Questions
 
-1. **YOLO model size:** YOLOv8 nano/small/medium/large? (Speed vs accuracy tradeoff)
-2. **Object selection ambiguity:** "Follow that car" when 5 cars visible — how to resolve? Closest? Pointing gesture? Explicit ("the red one")?
-3. **AirSim multi-drone performance:** Can one laptop run 4 drones + YOLO + Unreal rendering at 30fps?
-4. **Tracking persistence:** How long should drone remember an object after occlusion before giving up?
-5. **Formation rigidity:** Fixed formation (diamond always) or dynamic (adapt to obstacles)?
+1. **YOLO model size:** YOLOv8 nano/small/medium/large? (Speed vs accuracy tradeoff — decide after Phase 1 performance test)
+2. **Tracking persistence:** How long should drone remember an object after occlusion before giving up? (Test in Phase 3)
+3. **Formation rigidity:** Fixed formation (diamond always) or dynamic (adapt to obstacles)? (Defer to Phase 5)
 
 **Resolution path:** Build Phase 1-2, answers will emerge from testing. Document decisions as we go.
 
@@ -407,13 +704,15 @@ track_object(drone_id, object_id)  # Follow specific detected object
 ## Next Steps
 
 - [x] Create repo
-- [x] Write PRD (simulation-scoped)
+- [x] Write PRD (architecture finalized)
+- [ ] Install ArduPilot SITL (one instance)
+- [ ] Install MAVSDK-Python
 - [ ] Install AirSim + Unreal Engine 5
-- [ ] Configure AirSim with urban environment (Blocks or City)
-- [ ] Install YOLOv8 + test on sample images
-- [ ] Set up OpenClaw → AirSim Python API connection
+- [ ] Configure AirSim → SITL connection (MAVLink)
+- [ ] Build minimal Swarm Manager (3 tools: takeoff, move, land)
+- [ ] Configure OpenClaw MCP skill
 - [ ] Implement Phase 1: Single drone basic control
-- [ ] Document AirSim setup in README.md
+- [ ] Document SITL + AirSim setup in README.md
 
 ---
 

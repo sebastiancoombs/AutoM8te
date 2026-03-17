@@ -1,21 +1,30 @@
 # AutoM8te Python Dependencies
-# Phase 1: AirSim + Basic Control
 
-# AirSim control
-airsim>=1.8.1
+# === Core Dependencies ===
 
-# Computer vision (Phase 2, but install early)
-ultralytics>=8.0.0  # YOLOv8
+# Web Framework (for Swarm Manager REST API)
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+
+# Drone Control
+mavsdk==2.0.0  # SITL/ArduPilot control
+airsim>=1.8.1   # AirSim/Unreal control
+
+# Computer Vision
 opencv-python>=4.8.0
+ultralytics>=8.0.0  # YOLOv8
 numpy>=1.24.0
 
-# Optional CV enhancements
-# mediapipe>=0.10.0  # Pose/gesture (Phase 3)
+# Optional CV enhancements (Phase 3+)
+# deep-sort-realtime==1.3.2  # Object tracking
+# mediapipe>=0.10.0          # Pose/gesture
 
 # Utilities
 pyyaml>=6.0
-pydantic>=2.0.0  # Config validation
+python-dotenv==1.0.0
 
 # Development
 pytest>=7.4.0
+pytest-asyncio==0.21.1
 black>=23.0.0

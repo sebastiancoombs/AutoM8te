@@ -1,0 +1,36 @@
+# ArduPilot SITL Configuration
+# Defines connection parameters for each simulated drone
+
+drones:
+  - id: drone_1
+    sitl_port: 14550
+    connection_string: "udp://:14550"
+    description: "Primary drone (Swarm Leader)"
+  
+  - id: drone_2
+    sitl_port: 14560
+    connection_string: "udp://:14560"
+    description: "Secondary drone"
+  
+  - id: drone_3
+    sitl_port: 14570
+    connection_string: "udp://:14570"
+    description: "Tertiary drone"
+  
+  - id: drone_4
+    sitl_port: 14580
+    connection_string: "udp://:14580"
+    description: "Quaternary drone"
+
+# SITL Instance Launch Settings
+sitl:
+  home_location: "-35.363261,149.165230,584,353"  # Canberra, Australia (ArduPilot default)
+  speedup: 1  # Simulation speed multiplier (1 = real-time)
+  model: "quadplane"  # Vehicle type
+  defaults: "PATH_TO_ARDUPILOT/Tools/autotest/default_params/quadplane.parm"
+
+# Network Settings
+network:
+  mavlink_protocol_version: 2
+  heartbeat_interval_ms: 1000
+  timeout_s: 10
