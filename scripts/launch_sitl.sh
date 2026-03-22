@@ -1,89 +1,74 @@
 #!/bin/bash
-
-# Launch ArduPilot SITL instances for AutoM8te
-# Requires ArduPilot installed and built
+# Launch multiple ArduPilot SITL instances for multi-drone testing.
+#
+# Usage:
+#   ./scripts/launch_sitl.sh [NUM_INSTANCES]
+#   Default: 2 instances
+#
+# Each instance gets:
+#   - Unique instance ID (-I flag)
+#   - TCP port: 5760 + (instance * 10)
+#   - Home position offset: 50m east per instance
+#
+# Stop all: pkill -f arducopter
 
 set -e
 
-# Configuration
-ARDUPILOT_PATH="${ARDUPILOT_PATH:-$HOME/ardupilot}"
-VEHICLE_TYPE="ArduCopter"
-HOME_LOCATION="-35.363261,149.165230,584,353"  # Canberra, Australia
+ARDUPILOT_DIR="${ARDUPILOT_DIR:-$HOME/ardupilot}"
+NUM_INSTANCES="${1:-2}"
+SPEEDUP="${SITL_SPEEDUP:-10}"
 
-# Check if ArduPilot is installed
-if [ ! -d "$ARDUPILOT_PATH" ]; then
-    echo "Error: ArduPilot not found at $ARDUPILOT_PATH"
-    echo "Set ARDUPILOT_PATH environment variable or install ArduPilot"
-    exit 1
-fi
+# Base home location: Canberra, Australia (ArduPilot default)
+HOME_LAT="-35.363261"
+HOME_LON="149.165230"
+HOME_ALT="584"
+HOME_HDG="353"
 
-echo "================================"
-echo "AutoM8te SITL Launcher"
-echo "================================"
-echo "ArduPilot: $ARDUPILOT_PATH"
-echo "Vehicle: $VEHICLE_TYPE"
-echo "Home: $HOME_LOCATION"
+# Spacing between drones (meters east)
+SPACING_M=50
+
+echo "🚁 AutoM8te SITL Launcher"
+echo "  Instances: $NUM_INSTANCES"
+echo "  Speedup: ${SPEEDUP}x"
+echo "  ArduPilot: $ARDUPILOT_DIR"
 echo ""
 
-# Launch SITL instances
-cd "$ARDUPILOT_PATH/$VEHICLE_TYPE"
+# Kill any existing SITL instances
+pkill -f "arducopter" 2>/dev/null && echo "Killed existing SITL instances" && sleep 1 || true
 
-echo "Launching Drone 1 (UDP 14550, SITL 9003)..."
-sim_vehicle.py -v $VEHICLE_TYPE -I 0 \
-    --out=udp:127.0.0.1:14550 \
-    -L $HOME_LOCATION \
-    --speedup 1 \
-    --map \
-    --console &
-SITL1_PID=$!
-
-sleep 5
-
-echo "Launching Drone 2 (UDP 14560, SITL 9013)..."
-sim_vehicle.py -v $VEHICLE_TYPE -I 1 \
-    --out=udp:127.0.0.1:14560 \
-    -L $HOME_LOCATION \
-    --speedup 1 &
-SITL2_PID=$!
-
-sleep 5
-
-echo "Launching Drone 3 (UDP 14570, SITL 9023)..."
-sim_vehicle.py -v $VEHICLE_TYPE -I 2 \
-    --out=udp:127.0.0.1:14570 \
-    -L $HOME_LOCATION \
-    --speedup 1 &
-SITL3_PID=$!
-
-sleep 5
-
-echo "Launching Drone 4 (UDP 14580, SITL 9033)..."
-sim_vehicle.py -v $VEHICLE_TYPE -I 3 \
-    --out=udp:127.0.0.1:14580 \
-    -L $HOME_LOCATION \
-    --speedup 1 &
-SITL4_PID=$!
+for i in $(seq 0 $((NUM_INSTANCES - 1))); do
+    # Calculate offset longitude (~0.00045 degrees per 50m at this latitude)
+    LON_OFFSET=$(echo "$i * 0.00045 * ($SPACING_M / 50)" | bc -l)
+    INSTANCE_LON=$(echo "$HOME_LON + $LON_OFFSET" | bc -l)
+    INSTANCE_HOME="${HOME_LAT},${INSTANCE_LON},${HOME_ALT},${HOME_HDG}"
+    
+    TCP_PORT=$((5760 + i * 10))
+    
+    echo "Starting instance $i (TCP port $TCP_PORT, home: $INSTANCE_HOME)"
+    
+    cd "$ARDUPILOT_DIR"
+    python3 Tools/autotest/sim_vehicle.py \
+        -v ArduCopter \
+        -I "$i" \
+        --no-mavproxy \
+        --speedup "$SPEEDUP" \
+        -L "$INSTANCE_HOME" \
+        --out "tcp:127.0.0.1:${TCP_PORT}" \
+        &
+    
+    # Brief delay between instance launches
+    sleep 2
+done
 
 echo ""
-echo "================================"
-echo "All SITL instances launched!"
-echo "================================"
-echo "Drone 1: UDP 14550 (PID: $SITL1_PID)"
-echo "Drone 2: UDP 14560 (PID: $SITL2_PID)"
-echo "Drone 3: UDP 14570 (PID: $SITL3_PID)"
-echo "Drone 4: UDP 14580 (PID: $SITL4_PID)"
+echo "✅ $NUM_INSTANCES SITL instances launched"
 echo ""
-echo "Press Ctrl+C to stop all SITL instances"
+echo "Connection strings for pymavlink:"
+for i in $(seq 0 $((NUM_INSTANCES - 1))); do
+    echo "  drone_$((i+1)): tcp:127.0.0.1:$((5760 + i * 10))"
+done
+echo ""
+echo "Stop all: pkill -f arducopter"
 
-# Cleanup on exit
-cleanup() {
-    echo ""
-    echo "Stopping all SITL instances..."
-    kill $SITL1_PID $SITL2_PID $SITL3_PID $SITL4_PID 2>/dev/null || true
-    exit 0
-}
-
-trap cleanup INT TERM
-
-# Wait for all processes
+# Wait for all background processes
 wait

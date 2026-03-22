@@ -1,81 +1,118 @@
-#!/usr/bin/env python3
 """
-Integration test: DroneRegistry + CommandRouter → SITL
+Integration tests — require running SITL instances.
 
-Requires ArduPilot SITL running on tcp:127.0.0.1:5760:
-  cd ~/ardupilot && python3 Tools/autotest/sim_vehicle.py -v ArduCopter --no-mavproxy --speedup 10
+Run SITL first:
+    ./scripts/launch_sitl.sh 2
 
-Run:
-  python3 -m pytest tests/test_integration.py -v -s
+Then:
+    pytest tests/test_integration.py -v -s
 """
 
 import time
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import pytest
 from swarm_manager.drone_registry import DroneRegistry
 from swarm_manager.command_router import CommandRouter
 
 
-def test_register_and_takeoff():
-    """End-to-end: register drone, takeoff, check telemetry, land."""
-    registry = DroneRegistry()
-    router = CommandRouter(registry)
+# ── Fixtures ────────────────────────────────────────────────
 
-    # Register
-    print("\n=== Registering drone_1 ===")
-    state = registry.register("drone_1", "tcp:127.0.0.1:5760", wait_gps=True, gps_timeout=120)
-    assert state.is_connected
-    assert state.gps_fix >= 3, f"GPS fix too low: {state.gps_fix}"
-    print(f"  ✅ Registered: GPS fix={state.gps_fix}, sats={state.gps_sats}")
+@pytest.fixture
+def registry():
+    reg = DroneRegistry()
+    yield reg
+    reg.shutdown()
 
-    # Check telemetry
-    time.sleep(2)  # Let telemetry thread populate
-    telem = registry.get_telemetry("drone_1")
-    print(f"  📍 Position: lat={telem['position']['lat']:.6f}, lon={telem['position']['lon']:.6f}")
-    print(f"  🔋 Battery: {telem['battery']['percent']}%")
-    assert telem["connected"]
 
-    # Takeoff
-    print("\n=== Takeoff to 5m ===")
-    result = router.takeoff("drone_1", altitude_m=5.0)
-    print(f"  Result: {result}")
-    assert result["status"] == "success", f"Takeoff failed: {result}"
-    print(f"  ✅ {result['message']}")
+@pytest.fixture
+def router(registry):
+    return CommandRouter(registry)
 
-    # Wait for altitude
-    print("  Climbing...")
-    for i in range(20):
-        time.sleep(1)
+
+# ── Single Drone Tests ──────────────────────────────────────
+
+class TestSingleDrone:
+    """Tests that require one SITL instance on tcp:127.0.0.1:5760"""
+
+    def test_register(self, registry):
+        """Register a drone and verify connection."""
+        state = registry.register("drone_1", "tcp:127.0.0.1:5760")
+        assert state.is_connected
+        assert state.gps_fix_type >= 3
+        assert "drone_1" in registry.list_drones()
+
+    def test_takeoff_and_land(self, registry, router):
+        """Full takeoff → hover → land cycle."""
+        registry.register("drone_1", "tcp:127.0.0.1:5760")
+
+        # Takeoff
+        result = router.takeoff("drone_1", altitude_m=5.0)
+        assert result["status"] == "success"
+
+        # Check altitude
+        time.sleep(2)
         telem = registry.get_telemetry("drone_1")
-        alt = telem["position"]["alt_rel_m"]
-        print(f"  [{i+1}s] alt={alt:.1f}m mode={telem['flight_mode']}")
-        if alt >= 4.0:
-            print("  ✅ Reached target altitude!")
-            break
+        assert telem["position"]["alt_rel_m"] > 2.0
 
-    # Land
-    print("\n=== Landing ===")
-    result = router.land("drone_1")
-    assert result["status"] == "success"
-    print(f"  ✅ {result['message']}")
+        # Land
+        result = router.land("drone_1")
+        assert result["status"] == "success"
 
-    # Wait for landing
-    for i in range(25):
-        time.sleep(1)
+    def test_query_telemetry(self, registry):
+        """Register and read telemetry."""
+        registry.register("drone_1", "tcp:127.0.0.1:5760")
         telem = registry.get_telemetry("drone_1")
-        alt = telem["position"]["alt_rel_m"]
-        print(f"  [{i+1}s] alt={alt:.1f}m")
-        if alt < 0.3:
-            print("  ✅ Landed!")
-            break
-
-    # Cleanup
-    registry.shutdown()
-    print("\n🎉 Integration test passed!")
+        assert telem["drone_id"] == "drone_1"
+        assert telem["connected"] is True
+        assert telem["gps"]["fix_type"] >= 3
 
 
-if __name__ == "__main__":
-    test_register_and_takeoff()
+# ── Multi Drone Tests ───────────────────────────────────────
+
+class TestMultiDrone:
+    """Tests that require 2+ SITL instances (ports 5760, 5770)."""
+
+    def test_register_two_drones(self, registry):
+        """Register two drones on separate SITL instances."""
+        s1 = registry.register("drone_1", "tcp:127.0.0.1:5760")
+        s2 = registry.register("drone_2", "tcp:127.0.0.1:5770")
+
+        assert s1.is_connected
+        assert s2.is_connected
+        assert len(registry.list_drones()) == 2
+
+    def test_broadcast_takeoff(self, registry, router):
+        """Broadcast takeoff to multiple drones."""
+        registry.register("drone_1", "tcp:127.0.0.1:5760")
+        registry.register("drone_2", "tcp:127.0.0.1:5770")
+
+        result = router.broadcast("takeoff", altitude_m=5.0)
+        assert result["status"] == "success"
+        assert len(result["results"]) == 2
+
+        # Verify both are airborne
+        time.sleep(3)
+        for drone_id in ["drone_1", "drone_2"]:
+            telem = registry.get_telemetry(drone_id)
+            assert telem["position"]["alt_rel_m"] > 2.0, f"{drone_id} not airborne"
+
+        # Land all
+        router.broadcast("land")
+
+    def test_independent_commands(self, registry, router):
+        """Command drones independently."""
+        registry.register("drone_1", "tcp:127.0.0.1:5760")
+        registry.register("drone_2", "tcp:127.0.0.1:5770")
+
+        # Only takeoff drone_1
+        result = router.takeoff("drone_1", altitude_m=5.0)
+        assert result["status"] == "success"
+
+        time.sleep(3)
+
+        # drone_1 should be airborne, drone_2 should not
+        t1 = registry.get_telemetry("drone_1")
+        t2 = registry.get_telemetry("drone_2")
+        assert t1["position"]["alt_rel_m"] > 2.0
+        assert t2["position"]["alt_rel_m"] < 1.0
+
+        router.land("drone_1")

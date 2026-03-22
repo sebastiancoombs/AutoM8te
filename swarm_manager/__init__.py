@@ -1,7 +1,20 @@
 """
 AutoM8te Swarm Manager
 
-Centralized drone coordination layer between OpenClaw and ArduPilot SITL.
+Voice-controlled drone swarm system.
+Backend: pymavlink → ArduPilot SITL / real hardware.
 """
 
-__version__ = "0.1.0"
+from .drone_registry import DroneRegistry, DroneState
+from .command_router import CommandRouter
+from .formations import get_formation, assign_drones_to_slots, FORMATIONS
+
+__version__ = "0.2.0"
+__all__ = [
+    "DroneRegistry",
+    "DroneState",
+    "CommandRouter",
+    "get_formation",
+    "assign_drones_to_slots",
+    "FORMATIONS",
+]
