@@ -1,74 +1,83 @@
 #!/bin/bash
-# Launch multiple ArduPilot SITL instances for multi-drone testing.
-#
-# Usage:
-#   ./scripts/launch_sitl.sh [NUM_INSTANCES]
-#   Default: 2 instances
-#
-# Each instance gets:
-#   - Unique instance ID (-I flag)
-#   - TCP port: 5760 + (instance * 10)
-#   - Home position offset: 50m east per instance
-#
-# Stop all: pkill -f arducopter
+# AutoM8te Multi-Drone SITL Launcher
+# Each instance gets its own sim_vehicle.py process with isolated working dir
+# Ports: Instance 0 → tcp:5760, Instance 1 → tcp:5770, etc.
 
 set -e
 
-ARDUPILOT_DIR="${ARDUPILOT_DIR:-$HOME/ardupilot}"
-NUM_INSTANCES="${1:-2}"
-SPEEDUP="${SITL_SPEEDUP:-10}"
+NUM_DRONES="${1:-5}"
+ARDUPILOT_PATH="${ARDUPILOT_PATH:-$HOME/ardupilot}"
+HOME_LAT=-35.363261
+HOME_LON=149.165230
+HOME_ALT=584
+HOME_HDG=353
+SPACING=0.00003  # ~3m between drones
 
-# Base home location: Canberra, Australia (ArduPilot default)
-HOME_LAT="-35.363261"
-HOME_LON="149.165230"
-HOME_ALT="584"
-HOME_HDG="353"
+if [ ! -f "$ARDUPILOT_PATH/Tools/autotest/sim_vehicle.py" ]; then
+    echo "❌ ArduPilot not found at $ARDUPILOT_PATH"
+    exit 1
+fi
 
-# Spacing between drones (meters east)
-SPACING_M=50
+echo "🚁 AutoM8te SITL Launcher — $NUM_DRONES drones"
+echo "================================================"
 
-echo "🚁 AutoM8te SITL Launcher"
-echo "  Instances: $NUM_INSTANCES"
-echo "  Speedup: ${SPEEDUP}x"
-echo "  ArduPilot: $ARDUPILOT_DIR"
-echo ""
+PIDS=()
+TMPDIR_BASE=$(mktemp -d /tmp/autom8te_sitl.XXXXX)
+echo "Working dir: $TMPDIR_BASE"
 
-# Kill any existing SITL instances
-pkill -f "arducopter" 2>/dev/null && echo "Killed existing SITL instances" && sleep 1 || true
+cleanup() {
+    echo ""
+    echo "🛑 Shutting down all SITL instances..."
+    for pid in "${PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    # Kill any stray arducopter processes we spawned
+    pkill -f "arducopter.*$TMPDIR_BASE" 2>/dev/null || true
+    rm -rf "$TMPDIR_BASE"
+    echo "✅ Cleaned up"
+    exit 0
+}
+trap cleanup INT TERM
 
-for i in $(seq 0 $((NUM_INSTANCES - 1))); do
-    # Calculate offset longitude (~0.00045 degrees per 50m at this latitude)
-    LON_OFFSET=$(echo "$i * 0.00045 * ($SPACING_M / 50)" | bc -l)
-    INSTANCE_LON=$(echo "$HOME_LON + $LON_OFFSET" | bc -l)
-    INSTANCE_HOME="${HOME_LAT},${INSTANCE_LON},${HOME_ALT},${HOME_HDG}"
-    
-    TCP_PORT=$((5760 + i * 10))
-    
-    echo "Starting instance $i (TCP port $TCP_PORT, home: $INSTANCE_HOME)"
-    
-    cd "$ARDUPILOT_DIR"
-    python3 Tools/autotest/sim_vehicle.py \
+for i in $(seq 0 $((NUM_DRONES - 1))); do
+    PORT=$((5760 + i * 10))
+    LON=$(python3 -c "print(f'{$HOME_LON + $i * $SPACING:.6f}')")
+    INSTANCE_DIR="$TMPDIR_BASE/drone_$i"
+    mkdir -p "$INSTANCE_DIR"
+
+    echo "  Drone $((i+1)): Instance $i | Port $PORT | Home ($HOME_LAT, $LON)"
+
+    cd "$INSTANCE_DIR"
+    python3 "$ARDUPILOT_PATH/Tools/autotest/sim_vehicle.py" \
         -v ArduCopter \
         -I "$i" \
         --no-mavproxy \
-        --speedup "$SPEEDUP" \
-        -L "$INSTANCE_HOME" \
-        --out "tcp:127.0.0.1:${TCP_PORT}" \
-        &
-    
-    # Brief delay between instance launches
-    sleep 2
+        --speedup 1 \
+        -L "$HOME_LAT,$LON,$HOME_ALT,$HOME_HDG" \
+        > "$INSTANCE_DIR/sitl.log" 2>&1 &
+    PIDS+=($!)
+
+    # Stagger launches to avoid port conflicts
+    sleep 8
 done
 
 echo ""
-echo "✅ $NUM_INSTANCES SITL instances launched"
+echo "================================================"
+echo "✅ All $NUM_DRONES SITL instances launched!"
 echo ""
-echo "Connection strings for pymavlink:"
-for i in $(seq 0 $((NUM_INSTANCES - 1))); do
-    echo "  drone_$((i+1)): tcp:127.0.0.1:$((5760 + i * 10))"
+echo "TCP ports:"
+for i in $(seq 0 $((NUM_DRONES - 1))); do
+    PORT=$((5760 + i * 10))
+    echo "  drone_$((i+1)) → tcp:127.0.0.1:$PORT"
 done
 echo ""
-echo "Stop all: pkill -f arducopter"
+echo "Register with Swarm Manager:"
+for i in $(seq 1 "$NUM_DRONES"); do
+    PORT=$((5750 + i * 10))
+    echo "  curl -X POST http://localhost:8000/tools/drone_register -H 'Content-Type: application/json' -d '{\"drone_id\":\"drone_$i\",\"connection_string\":\"tcp:127.0.0.1:$PORT\"}'"
+done
+echo ""
+echo "Press Ctrl+C to stop all instances"
 
-# Wait for all background processes
+# Wait for all
 wait

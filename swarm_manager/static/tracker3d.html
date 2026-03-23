@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AutoM8te — 3D Drone Tracker</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box }
+body { background: #0a0a12; color: #eee; font-family: -apple-system, system-ui, sans-serif; overflow: hidden }
+#c { width: 100vw; height: 100vh; display: block }
+#hud { position: fixed; bottom: 0; left: 0; right: 0; padding: 12px 20px; background: rgba(10,10,18,.85);
+  backdrop-filter: blur(10px); display: flex; gap: 24px; align-items: center; border-top: 1px solid #222; z-index: 10 }
+.stat { display: flex; flex-direction: column }
+.stat .label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 1px }
+.stat .val { font-size: 20px; font-weight: 700 }
+#title { position: fixed; top: 16px; left: 20px; font-size: 15px; font-weight: 600; z-index: 10;
+  background: rgba(10,10,18,.7); padding: 8px 14px; border-radius: 8px; backdrop-filter: blur(8px) }
+#title span { color: #4af }
+.armed { color: #f55 !important } .disarmed { color: #666 }
+.mode { color: #4af } .alt { color: #4f8 } .spd { color: #fa4 } .bat { color: #af4 }
+#controls { position: fixed; top: 16px; right: 20px; z-index: 10; display: flex; gap: 8px }
+#controls button { padding: 8px 16px; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px }
+.btn-g { background: #2a6; color: #fff } .btn-r { background: #c44; color: #fff } .btn-y { background: #a80; color: #fff }
+</style>
+</head>
+<body>
+<div id="title">🚁 <span>AutoM8te</span> 3D Tracker</div>
+<div id="controls">
+  <button class="btn-g" onclick="cmd('/tools/drone_takeoff',{drone_id:'drone_1',altitude_m:10})">Takeoff</button>
+  <button class="btn-r" onclick="cmd('/tools/drone_land',{drone_id:'drone_1'})">Land</button>
+  <button class="btn-y" onclick="cmd('/tools/drone_return_home',{drone_id:'drone_1'})">RTL</button>
+</div>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div class="stat"><span class="label">Status</span><span class="val disarmed" id="arm">DISARMED</span></div>
+  <div class="stat"><span class="label">Mode</span><span class="val mode" id="mode">--</span></div>
+  <div class="stat"><span class="label">Altitude</span><span class="val alt" id="alt">--</span></div>
+  <div class="stat"><span class="label">Speed</span><span class="val spd" id="spd">--</span></div>
+  <div class="stat"><span class="label">Battery</span><span class="val bat" id="bat">--</span></div>
+  <div class="stat"><span class="label">GPS</span><span class="val" id="gps">--</span></div>
+  <div class="stat"><span class="label">Position</span><span class="val" id="pos" style="font-size:12px;color:#888">--</span></div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const API = window.location.origin;
+const canvas = document.getElementById('c');
+
+// Scene
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a18);
+scene.fog = new THREE.Fog(0x0a0a18, 80, 200);
+
+// Camera
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 500);
+camera.position.set(15, 12, 15);
+
+// Renderer
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+
+// Controls
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.target.set(0, 3, 0);
+
+// Lights
+scene.add(new THREE.AmbientLight(0x334466, 1.5));
+const sun = new THREE.DirectionalLight(0xffeedd, 2);
+sun.position.set(20, 30, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+scene.add(sun);
+
+// Ground grid
+const gridSize = 100;
+const grid = new THREE.GridHelper(gridSize, gridSize, 0x1a2a3a, 0x111a22);
+scene.add(grid);
+
+// Ground plane (for shadows)
+const groundGeo = new THREE.PlaneGeometry(gridSize, gridSize);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x0d1117, roughness: 1 });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI/2;
+ground.position.y = -0.01;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Home marker
+const homeGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.05, 32);
+const homeMat = new THREE.MeshStandardMaterial({ color: 0x44aaff, emissive: 0x224466 });
+const home = new THREE.Mesh(homeGeo, homeMat);
+home.position.y = 0.03;
+scene.add(home);
+
+// Home ring pulse
+const ringGeo = new THREE.RingGeometry(0.6, 0.8, 32);
+const ringMat = new THREE.MeshBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.3, side: THREE.DoubleSide });
+const ring = new THREE.Mesh(ringGeo, ringMat);
+ring.rotation.x = -Math.PI/2;
+ring.position.y = 0.04;
+scene.add(ring);
+
+// Drone body
+const droneGroup = new THREE.Group();
+
+// Central body
+const bodyGeo = new THREE.BoxGeometry(0.6, 0.15, 0.6);
+const bodyMat = new THREE.MeshStandardMaterial({ color: 0x333340, metalness: 0.7, roughness: 0.3 });
+const body = new THREE.Mesh(bodyGeo, bodyMat);
+body.castShadow = true;
+droneGroup.add(body);
+
+// Arms + rotors
+const armPositions = [[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1]];
+const rotorMat = new THREE.MeshStandardMaterial({ color: 0x44aaff, emissive: 0x112244, metalness: 0.5 });
+const rotors = [];
+armPositions.forEach(([x,y,z]) => {
+  // Arm
+  const armGeo = new THREE.CylinderGeometry(0.03, 0.03, 1.2);
+  const armMat = new THREE.MeshStandardMaterial({ color: 0x444455 });
+  const arm = new THREE.Mesh(armGeo, armMat);
+  arm.rotation.z = Math.PI/2;
+  arm.position.set(x*0.4, 0, z*0.4);
+  arm.lookAt(x*0.8, 0, z*0.8);
+  droneGroup.add(arm);
+  // Motor
+  const motorGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.1, 8);
+  const motor = new THREE.Mesh(motorGeo, new THREE.MeshStandardMaterial({ color: 0x222233 }));
+  motor.position.set(x*0.7, 0.08, z*0.7);
+  droneGroup.add(motor);
+  // Rotor disc
+  const rotorGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.02, 16);
+  const rotor = new THREE.Mesh(rotorGeo, rotorMat.clone());
+  rotor.material.transparent = true;
+  rotor.material.opacity = 0.4;
+  rotor.position.set(x*0.7, 0.15, z*0.7);
+  droneGroup.add(rotor);
+  rotors.push(rotor);
+});
+
+// LED on front
+const ledGeo = new THREE.SphereGeometry(0.04, 8, 8);
+const ledMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+const led = new THREE.Mesh(ledGeo, ledMat);
+led.position.set(0, -0.05, 0.35);
+droneGroup.add(led);
+
+droneGroup.position.y = 0;
+scene.add(droneGroup);
+
+// Shadow line (altitude indicator)
+const shadowGeo = new THREE.RingGeometry(0.3, 0.35, 16);
+const shadowMat = new THREE.MeshBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.2, side: THREE.DoubleSide });
+const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+shadow.rotation.x = -Math.PI/2;
+scene.add(shadow);
+
+// Altitude line
+const altLineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,1,0)]);
+const altLineMat = new THREE.LineDashedMaterial({ color: 0x44aaff, transparent: true, opacity: 0.3, dashSize: 0.2, gapSize: 0.1 });
+const altLine = new THREE.Line(altLineGeo, altLineMat);
+altLine.computeLineDistances();
+scene.add(altLine);
+
+// Trail
+const maxTrail = 500;
+const trailPoints = [];
+const trailGeo = new THREE.BufferGeometry();
+const trailMat = new THREE.LineBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.5 });
+const trailLine = new THREE.Line(trailGeo, trailMat);
+scene.add(trailLine);
+
+// State
+let homeLat = null, homeLon = null;
+let droneAlt = 0, armed = false;
+
+function gpsToLocal(lat, lon) {
+  if (!homeLat) return {x:0, z:0};
+  const dx = (lon - homeLon) * 111320 * Math.cos(homeLat * Math.PI/180);
+  const dz = -(lat - homeLat) * 110540;
+  return {x: dx, z: dz};
+}
+
+async function cmd(endpoint, body) {
+  try { await fetch(API + endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); } catch(e) {}
+}
+window.cmd = cmd;
+
+async function poll() {
+  try {
+    const r = await fetch(API + '/tools/drone_query', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({drone_id:'drone_1'})
+    });
+    const d = await r.json();
+    if (d.status !== 'success') return;
+    const t = d.telemetry, p = t.position;
+
+    if (!homeLat) { homeLat = p.lat; homeLon = p.lon; }
+
+    const local = gpsToLocal(p.lat, p.lon);
+    droneAlt = Math.max(0, p.alt_rel_m);
+    armed = t.armed;
+
+    // Update drone position
+    droneGroup.position.set(local.x, droneAlt, local.z);
+    droneGroup.rotation.y = -(p.heading || 0) * Math.PI / 180;
+
+    // Shadow + altitude line
+    shadow.position.set(local.x, 0.02, local.z);
+    shadow.scale.setScalar(1 + droneAlt * 0.1);
+    shadowMat.opacity = Math.max(0.05, 0.3 - droneAlt * 0.01);
+
+    altLine.position.set(local.x, 0, local.z);
+    const pts = [new THREE.Vector3(0,0,0), new THREE.Vector3(0, droneAlt, 0)];
+    altLine.geometry.setFromPoints(pts);
+    altLine.computeLineDistances();
+    altLine.visible = droneAlt > 0.5;
+
+    // Trail
+    if (droneAlt > 0.3) {
+      trailPoints.push(new THREE.Vector3(local.x, droneAlt, local.z));
+      if (trailPoints.length > maxTrail) trailPoints.shift();
+      trailGeo.setFromPoints(trailPoints);
+    }
+
+    // HUD
+    document.getElementById('alt').textContent = droneAlt.toFixed(1) + 'm';
+    document.getElementById('spd').textContent = t.speed.groundspeed_ms.toFixed(1) + ' m/s';
+    document.getElementById('bat').textContent = t.battery.percent + '%';
+    document.getElementById('gps').textContent = t.gps.satellites + ' sats';
+    document.getElementById('pos').textContent = p.lat.toFixed(6) + ', ' + p.lon.toFixed(6);
+
+    const armEl = document.getElementById('arm');
+    armEl.textContent = t.armed ? '● ARMED' : '○ DISARMED';
+    armEl.className = 'val ' + (t.armed ? 'armed' : 'disarmed');
+    document.getElementById('mode').textContent = t.flight_mode;
+
+  } catch(e) {}
+}
+
+setInterval(poll, 400);
+poll();
+
+// Animate
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  // Spin rotors when armed
+  rotors.forEach((r, i) => {
+    r.rotation.y = armed ? t * 30 + i * Math.PI/2 : 0;
+    r.material.opacity = armed ? 0.15 + Math.sin(t*5)*0.05 : 0.4;
+  });
+
+  // Pulse ring
+  ring.scale.setScalar(1 + Math.sin(t*2)*0.1);
+  ringMat.opacity = 0.2 + Math.sin(t*2)*0.1;
+
+  // LED blink
+  ledMat.color.setHex(Math.sin(t*3) > 0 ? 0xff3333 : 0x331111);
+
+  // Gentle drone hover wobble when airborne
+  if (droneAlt > 0.5) {
+    droneGroup.position.y = droneAlt + Math.sin(t*1.5)*0.03;
+    droneGroup.rotation.z = Math.sin(t*0.8)*0.02;
+    droneGroup.rotation.x = Math.cos(t*0.6)*0.015;
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AutoM8te Drone Tracker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box }
+body { font-family: -apple-system, system-ui, sans-serif; background: #111; color: #eee }
+#map { height: 60vh; width: 100% }
+#hud { padding: 16px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px }
+#hud .card { background: #22222a; border-radius: 10px; padding: 14px; border: 1px solid #333 }
+.card .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px }
+.card .value { font-size: 26px; font-weight: 700; margin-top: 4px }
+.card .unit { font-size: 13px; color: #666; font-weight: 400 }
+#status { padding: 8px 16px; background: #22222a; font-size: 12px; color: #888; display: flex; justify-content: space-between; align-items: center }
+.armed { color: #f44 !important; font-weight: 700 }
+.disarmed { color: #888 }
+.mode { color: #4af; font-weight: 700 }
+h1 { font-size: 16px; padding: 12px 16px; background: #18181f; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 8px }
+h1 span { color: #4af }
+#controls { padding: 12px 16px; display: flex; gap: 8px }
+#controls button { padding: 8px 20px; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px }
+.btn-takeoff { background: #2a6; color: #fff }
+.btn-land { background: #c44; color: #fff }
+.btn-rtl { background: #a80; color: #fff }
+</style>
+</head>
+<body>
+<h1>🚁 <span>AutoM8te</span> Live Drone Tracker</h1>
+<div id="controls">
+  <button class="btn-takeoff" onclick="takeoff()">Takeoff 10m</button>
+  <button class="btn-land" onclick="land()">Land</button>
+  <button class="btn-rtl" onclick="rtl()">Return Home</button>
+</div>
+<div id="map"></div>
+<div id="hud">
+  <div class="card"><div class="label">Altitude</div><div class="value" id="alt">--<span class="unit">m</span></div></div>
+  <div class="card"><div class="label">Speed</div><div class="value" id="spd">--<span class="unit">m/s</span></div></div>
+  <div class="card"><div class="label">Battery</div><div class="value" id="bat">--<span class="unit">%</span></div></div>
+  <div class="card"><div class="label">GPS</div><div class="value" id="gps">--<span class="unit">sats</span></div></div>
+</div>
+<div id="status">
+  <span id="arm">DISARMED</span>
+  <span id="mode">--</span>
+  <span id="pos">--</span>
+  <span id="updated">Connecting...</span>
+</div>
+
+<script>
+const API = window.location.origin;
+const map = L.map('map').setView([-35.3632, 149.1652], 18);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 22, attribution: 'OSM'
+}).addTo(map);
+
+const droneIcon = L.divIcon({
+  html: '<div style="font-size:32px;filter:drop-shadow(0 2px 6px rgba(0,0,0,.6))">🚁</div>',
+  iconSize: [36, 36], iconAnchor: [18, 18], className: ''
+});
+
+let marker = null;
+let trail = L.polyline([], {color: '#4af', weight: 2, opacity: 0.6}).addTo(map);
+let centered = false;
+
+async function cmd(endpoint, body) {
+  try {
+    const r = await fetch(API + endpoint, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+    });
+    return await r.json();
+  } catch(e) { console.error(e); }
+}
+
+function takeoff() { cmd('/tools/drone_takeoff', {drone_id:'drone_1', altitude_m:10}); }
+function land() { cmd('/tools/drone_land', {drone_id:'drone_1'}); }
+function rtl() { cmd('/tools/drone_return_home', {drone_id:'drone_1'}); }
+
+async function poll() {
+  try {
+    const d = await cmd('/tools/drone_query', {drone_id: 'drone_1'});
+    if (d && d.status === 'success') {
+      const t = d.telemetry, p = t.position;
+      const lat = p.lat, lon = p.lon;
+
+      if (!marker) {
+        marker = L.marker([lat, lon], {icon: droneIcon}).addTo(map);
+      } else {
+        marker.setLatLng([lat, lon]);
+      }
+      if (!centered) { map.setView([lat, lon], 18); centered = true; }
+
+      trail.addLatLng([lat, lon]);
+      if (trail.getLatLngs().length > 500) trail.setLatLngs(trail.getLatLngs().slice(-500));
+
+      document.getElementById('alt').innerHTML = p.alt_rel_m.toFixed(1) + '<span class="unit">m</span>';
+      document.getElementById('spd').innerHTML = t.speed.groundspeed_ms.toFixed(1) + '<span class="unit">m/s</span>';
+      document.getElementById('bat').innerHTML = t.battery.percent + '<span class="unit">%</span>';
+      document.getElementById('gps').innerHTML = t.gps.satellites + '<span class="unit">sats</span>';
+
+      const arm = document.getElementById('arm');
+      arm.textContent = t.armed ? '● ARMED' : '○ DISARMED';
+      arm.className = t.armed ? 'armed' : 'disarmed';
+      document.getElementById('mode').textContent = t.flight_mode;
+      document.getElementById('pos').textContent = lat.toFixed(6) + ', ' + lon.toFixed(6);
+      document.getElementById('updated').textContent = new Date().toLocaleTimeString();
+    }
+  } catch(e) {
+    document.getElementById('updated').textContent = 'Error: ' + e.message;
+  }
+}
+
+setInterval(poll, 500);
+poll();
+</script>
+</body>
+</html>

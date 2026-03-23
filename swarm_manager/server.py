@@ -14,8 +14,13 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Optional
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 from .drone_registry import DroneRegistry
 from .command_router import CommandRouter
@@ -433,6 +438,19 @@ async def list_drones():
     """List all drones with telemetry."""
     telemetry = registry.get_all_telemetry()
     return {"count": len(telemetry), "drones": telemetry}
+
+
+# ── Tracker UI ──────────────────────────────────────────────
+
+
+@app.get("/tracker")
+async def tracker():
+    return FileResponse(str(STATIC_DIR / "tracker.html"))
+
+
+@app.get("/tracker3d")
+async def tracker3d():
+    return FileResponse(str(STATIC_DIR / "tracker3d.html"))
 
 
 # ── Main ────────────────────────────────────────────────────
