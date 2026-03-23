@@ -17,7 +17,11 @@ from typing import Optional
 from pymavlink import mavutil
 
 from .drone_registry import DroneRegistry, DroneState
-from .formations import get_formation, assign_drones_to_slots, GPSPosition, _ned_to_gps
+from .formations import (
+    get_formation, assign_drones_to_slots, GPSPosition, _ned_to_gps,
+    orbit_waypoints, multi_drone_orbit_offsets,
+    search_grid_waypoints, SearchBounds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -398,6 +402,309 @@ class CommandRouter:
             ],
             "results": results,
         }
+
+    def orbit(self, drone_id: str, center_lat: float, center_lon: float,
+              radius_m: float = 20.0, alt_m: float = 15.0, speed_ms: float = 3.0,
+              clockwise: bool = True, laps: int = 0) -> dict:
+        """
+        Command a drone to orbit a GPS point (Tier 1 primitive).
+
+        Sends sequential waypoints around a circle. The drone flies through
+        them in order, creating a circular orbit.
+
+        Args:
+            center_lat, center_lon: Center of orbit (GPS)
+            radius_m: Orbit radius in meters
+            alt_m: Orbit altitude
+            speed_ms: Cruise speed (not directly set — governed by GUIDED mode speed)
+            clockwise: Orbit direction
+            laps: Number of laps (0 = continuous until new command)
+        """
+        logger.info(f"{drone_id}: Orbit ({center_lat}, {center_lon}) r={radius_m}m")
+
+        try:
+            state = self._get_state(drone_id)
+
+            # Ensure GUIDED mode
+            if not self._set_mode(state, "GUIDED"):
+                return {"status": "error", "message": "Failed to set GUIDED mode", "drone_id": drone_id}
+
+            # Get current position to find nearest entry point
+            current_angle = math.atan2(
+                state.lon - center_lon,
+                state.lat - center_lat,
+            )
+            start_angle_deg = math.degrees(current_angle)
+
+            waypoints = orbit_waypoints(
+                center_lat, center_lon, radius_m, alt_m,
+                num_points=36,
+                start_angle_deg=start_angle_deg,
+                clockwise=clockwise,
+            )
+
+            state.current_task = "orbiting"
+            state._orbit_waypoints = waypoints
+            state._orbit_index = 0
+            state._orbit_laps = laps
+            state._orbit_laps_done = 0
+
+            # Send first waypoint to get the drone moving
+            wp = waypoints[0]
+            self.goto(drone_id, wp.lat, wp.lon, wp.alt_m)
+
+            return {
+                "status": "success",
+                "message": f"{drone_id} orbiting ({center_lat}, {center_lon}) r={radius_m}m",
+                "drone_id": drone_id,
+                "orbit": {
+                    "center_lat": center_lat,
+                    "center_lon": center_lon,
+                    "radius_m": radius_m,
+                    "alt_m": alt_m,
+                    "clockwise": clockwise,
+                    "waypoints": len(waypoints),
+                    "laps": laps if laps > 0 else "continuous",
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"{drone_id}: Orbit failed: {e}")
+            return {"status": "error", "message": f"Orbit failed: {e}", "drone_id": drone_id}
+
+    def orbit_swarm(self, center_lat: float, center_lon: float,
+                    radius_m: float = 20.0, alt_m: float = 15.0,
+                    clockwise: bool = True) -> dict:
+        """
+        Command all drones to orbit the same point, evenly phase-offset.
+
+        Each drone starts at a different angle so they're evenly distributed
+        around the circle from the start.
+        """
+        drone_ids = self.registry.list_drones()
+        if not drone_ids:
+            return {"status": "error", "message": "No drones registered"}
+
+        offsets = multi_drone_orbit_offsets(len(drone_ids), radius_m, alt_m, clockwise)
+        results = []
+
+        for i, drone_id in enumerate(drone_ids):
+            state = self._get_state(drone_id)
+            if not self._set_mode(state, "GUIDED"):
+                results.append({"drone_id": drone_id, "status": "error", "message": "Mode change failed"})
+                continue
+
+            waypoints = orbit_waypoints(
+                center_lat, center_lon, radius_m, alt_m,
+                num_points=36,
+                start_angle_deg=offsets[i],
+                clockwise=clockwise,
+            )
+
+            state.current_task = "orbiting"
+            state._orbit_waypoints = waypoints
+            state._orbit_index = 0
+            state._orbit_laps = 0
+            state._orbit_laps_done = 0
+
+            wp = waypoints[0]
+            result = self.goto(drone_id, wp.lat, wp.lon, wp.alt_m)
+            results.append(result)
+
+        return {
+            "status": "success",
+            "message": f"{len(drone_ids)} drones orbiting ({center_lat}, {center_lon})",
+            "results": results,
+        }
+
+    def advance_orbit(self, drone_id: str, tolerance_m: float = 5.0) -> Optional[dict]:
+        """
+        Check if drone reached current orbit waypoint and advance to next.
+
+        Call this periodically (e.g., from a telemetry update loop) to keep
+        the orbit going. Returns None if no action needed.
+        """
+        try:
+            state = self._get_state(drone_id)
+        except KeyError:
+            return None
+
+        if state.current_task != "orbiting":
+            return None
+
+        wps = getattr(state, '_orbit_waypoints', None)
+        if not wps:
+            return None
+
+        idx = getattr(state, '_orbit_index', 0)
+        wp = wps[idx]
+
+        # Check if drone is close enough to current waypoint
+        from .formations import _haversine_m
+        dist = _haversine_m(state.lat, state.lon, wp.lat, wp.lon)
+
+        if dist <= tolerance_m:
+            # Advance to next waypoint
+            next_idx = (idx + 1) % len(wps)
+            if next_idx == 0:
+                state._orbit_laps_done = getattr(state, '_orbit_laps_done', 0) + 1
+                max_laps = getattr(state, '_orbit_laps', 0)
+                if max_laps > 0 and state._orbit_laps_done >= max_laps:
+                    state.current_task = "hovering"
+                    logger.info(f"{drone_id}: Orbit complete ({state._orbit_laps_done} laps)")
+                    return {"status": "orbit_complete", "laps": state._orbit_laps_done}
+
+            state._orbit_index = next_idx
+            next_wp = wps[next_idx]
+            self.goto(drone_id, next_wp.lat, next_wp.lon, next_wp.alt_m)
+            return {"status": "advancing", "waypoint": next_idx, "of": len(wps)}
+
+        return None
+
+    def search(self, drone_id: str, min_lat: float, min_lon: float,
+               max_lat: float, max_lon: float, alt_m: float = 20.0,
+               pattern: str = "grid", swath_width_m: float = 30.0) -> dict:
+        """
+        Command a single drone to search a rectangular area (Tier 1 primitive).
+
+        Args:
+            min_lat, min_lon, max_lat, max_lon: Bounding box
+            alt_m: Search altitude
+            pattern: "grid", "spiral", or "expanding"
+            swath_width_m: Width per pass (based on sensor FOV)
+        """
+        logger.info(f"{drone_id}: Search [{min_lat},{min_lon}]-[{max_lat},{max_lon}] pattern={pattern}")
+
+        try:
+            state = self._get_state(drone_id)
+
+            if not self._set_mode(state, "GUIDED"):
+                return {"status": "error", "message": "Failed to set GUIDED mode", "drone_id": drone_id}
+
+            bounds = SearchBounds(min_lat, min_lon, max_lat, max_lon)
+            waypoints = search_grid_waypoints(
+                bounds, alt_m, pattern=pattern,
+                drone_count=1, drone_index=0,
+                swath_width_m=swath_width_m,
+            )
+
+            state.current_task = "searching"
+            state._search_waypoints = waypoints
+            state._search_index = 0
+
+            # Send first waypoint
+            if waypoints:
+                wp = waypoints[0]
+                self.goto(drone_id, wp.lat, wp.lon, wp.alt_m)
+
+            return {
+                "status": "success",
+                "message": f"{drone_id} searching area ({pattern} pattern)",
+                "drone_id": drone_id,
+                "search": {
+                    "pattern": pattern,
+                    "bounds": {"min_lat": min_lat, "min_lon": min_lon, "max_lat": max_lat, "max_lon": max_lon},
+                    "alt_m": alt_m,
+                    "waypoints": len(waypoints),
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"{drone_id}: Search failed: {e}")
+            return {"status": "error", "message": f"Search failed: {e}", "drone_id": drone_id}
+
+    def search_swarm(self, min_lat: float, min_lon: float,
+                     max_lat: float, max_lon: float, alt_m: float = 20.0,
+                     pattern: str = "grid", swath_width_m: float = 30.0) -> dict:
+        """
+        Distribute a search area across all registered drones.
+
+        Each drone gets a vertical strip of the area (grid pattern) or
+        the full area (spiral/expanding with single drone fallback).
+        """
+        drone_ids = self.registry.list_drones()
+        if not drone_ids:
+            return {"status": "error", "message": "No drones registered"}
+
+        bounds = SearchBounds(min_lat, min_lon, max_lat, max_lon)
+        results = []
+
+        for i, drone_id in enumerate(drone_ids):
+            state = self._get_state(drone_id)
+            if not self._set_mode(state, "GUIDED"):
+                results.append({"drone_id": drone_id, "status": "error", "message": "Mode change failed"})
+                continue
+
+            waypoints = search_grid_waypoints(
+                bounds, alt_m, pattern=pattern,
+                drone_count=len(drone_ids), drone_index=i,
+                swath_width_m=swath_width_m,
+            )
+
+            state.current_task = "searching"
+            state._search_waypoints = waypoints
+            state._search_index = 0
+
+            if waypoints:
+                wp = waypoints[0]
+                self.goto(drone_id, wp.lat, wp.lon, wp.alt_m)
+
+            results.append({
+                "drone_id": drone_id,
+                "status": "success",
+                "waypoints": len(waypoints),
+            })
+
+        return {
+            "status": "success",
+            "message": f"{len(drone_ids)} drones searching area ({pattern} pattern)",
+            "search": {
+                "pattern": pattern,
+                "bounds": {"min_lat": min_lat, "min_lon": min_lon, "max_lat": max_lat, "max_lon": max_lon},
+            },
+            "results": results,
+        }
+
+    def advance_search(self, drone_id: str, tolerance_m: float = 5.0) -> Optional[dict]:
+        """
+        Check if drone reached current search waypoint and advance to next.
+
+        Call this periodically. Returns None if no action needed.
+        """
+        try:
+            state = self._get_state(drone_id)
+        except KeyError:
+            return None
+
+        if state.current_task != "searching":
+            return None
+
+        wps = getattr(state, '_search_waypoints', None)
+        if not wps:
+            return None
+
+        idx = getattr(state, '_search_index', 0)
+        if idx >= len(wps):
+            state.current_task = "hovering"
+            return {"status": "search_complete"}
+
+        wp = wps[idx]
+        from .formations import _haversine_m
+        dist = _haversine_m(state.lat, state.lon, wp.lat, wp.lon)
+
+        if dist <= tolerance_m:
+            next_idx = idx + 1
+            if next_idx >= len(wps):
+                state.current_task = "hovering"
+                logger.info(f"{drone_id}: Search complete ({len(wps)} waypoints)")
+                return {"status": "search_complete", "waypoints_visited": len(wps)}
+
+            state._search_index = next_idx
+            next_wp = wps[next_idx]
+            self.goto(drone_id, next_wp.lat, next_wp.lon, next_wp.alt_m)
+            return {"status": "advancing", "waypoint": next_idx, "of": len(wps)}
+
+        return None
 
     def broadcast(self, command: str, **kwargs) -> dict:
         """Send command to all registered drones."""

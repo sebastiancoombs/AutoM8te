@@ -7,13 +7,14 @@ Runs in a thread pool to avoid blocking the event loop.
 """
 
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 from .drone_registry import DroneRegistry
@@ -42,7 +43,7 @@ def _run_sync(fn, *args, **kwargs):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
-    logger.info("AutoM8te Swarm Manager v0.2.0 starting up...")
+    logger.info("AutoM8te Swarm Manager v0.3.0 starting up...")
     yield
     logger.info("AutoM8te Swarm Manager shutting down...")
     registry.shutdown()
@@ -52,7 +53,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AutoM8te Swarm Manager",
     description="MCP server for voice-controlled drone swarm (pymavlink backend)",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -101,6 +102,46 @@ class FormationRequest(BaseModel):
 class BroadcastRequest(BaseModel):
     command: str = Field(..., description="Command to broadcast (takeoff, land, return_home, emergency_stop)")
     altitude_m: Optional[float] = Field(5.0, description="Altitude for takeoff")
+
+
+class OrbitRequest(BaseModel):
+    drone_id: str = Field(..., description="Target drone ID")
+    center_lat: float = Field(..., description="Center latitude")
+    center_lon: float = Field(..., description="Center longitude")
+    radius_m: float = Field(20.0, description="Orbit radius in meters", ge=5.0, le=500.0)
+    alt_m: float = Field(15.0, description="Orbit altitude in meters", ge=2.0, le=120.0)
+    speed_ms: float = Field(3.0, description="Cruise speed m/s")
+    clockwise: bool = Field(True, description="Orbit direction")
+    laps: int = Field(0, description="Number of laps (0=continuous)", ge=0)
+
+
+class OrbitSwarmRequest(BaseModel):
+    center_lat: float = Field(..., description="Center latitude")
+    center_lon: float = Field(..., description="Center longitude")
+    radius_m: float = Field(20.0, description="Orbit radius in meters")
+    alt_m: float = Field(15.0, description="Orbit altitude in meters")
+    clockwise: bool = Field(True, description="Orbit direction")
+
+
+class SearchRequest(BaseModel):
+    drone_id: str = Field(..., description="Target drone ID")
+    min_lat: float = Field(..., description="South boundary latitude")
+    min_lon: float = Field(..., description="West boundary longitude")
+    max_lat: float = Field(..., description="North boundary latitude")
+    max_lon: float = Field(..., description="East boundary longitude")
+    alt_m: float = Field(20.0, description="Search altitude in meters")
+    pattern: str = Field("grid", description="Search pattern: grid, spiral, expanding")
+    swath_width_m: float = Field(30.0, description="Swath width in meters")
+
+
+class SearchSwarmRequest(BaseModel):
+    min_lat: float = Field(..., description="South boundary latitude")
+    min_lon: float = Field(..., description="West boundary longitude")
+    max_lat: float = Field(..., description="North boundary latitude")
+    max_lon: float = Field(..., description="East boundary longitude")
+    alt_m: float = Field(20.0, description="Search altitude in meters")
+    pattern: str = Field("grid", description="Search pattern: grid, spiral, expanding")
+    swath_width_m: float = Field(30.0, description="Swath width in meters")
 
 
 # ── Endpoints ───────────────────────────────────────────────
@@ -210,6 +251,181 @@ async def drone_broadcast(req: BroadcastRequest):
         kwargs["altitude_m"] = req.altitude_m
     result = await _run_sync(router.broadcast, req.command, **kwargs)
     return result
+
+
+@app.post("/tools/drone_orbit")
+async def drone_orbit(req: OrbitRequest):
+    """Orbit a GPS point (Tier 1 primitive)."""
+    result = await _run_sync(
+        router.orbit, req.drone_id, req.center_lat, req.center_lon,
+        req.radius_m, req.alt_m, req.speed_ms, req.clockwise, req.laps,
+    )
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    return result
+
+
+@app.post("/tools/drone_orbit_swarm")
+async def drone_orbit_swarm(req: OrbitSwarmRequest):
+    """All drones orbit the same point, evenly phase-offset."""
+    result = await _run_sync(
+        router.orbit_swarm, req.center_lat, req.center_lon,
+        req.radius_m, req.alt_m, req.clockwise,
+    )
+    if result["status"] == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+
+@app.post("/tools/drone_search")
+async def drone_search(req: SearchRequest):
+    """Search an area with a single drone (Tier 1 primitive)."""
+    result = await _run_sync(
+        router.search, req.drone_id, req.min_lat, req.min_lon,
+        req.max_lat, req.max_lon, req.alt_m, req.pattern, req.swath_width_m,
+    )
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    return result
+
+
+@app.post("/tools/drone_search_swarm")
+async def drone_search_swarm(req: SearchSwarmRequest):
+    """Distribute search across all drones (area split by strips)."""
+    result = await _run_sync(
+        router.search_swarm, req.min_lat, req.min_lon,
+        req.max_lat, req.max_lon, req.alt_m, req.pattern, req.swath_width_m,
+    )
+    if result["status"] == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+
+# ── WebSocket Telemetry Stream ──────────────────────────────
+
+class TelemetryBroadcaster:
+    """Manages WebSocket connections and broadcasts telemetry updates."""
+
+    def __init__(self):
+        self.connections: list[WebSocket] = []
+        self._task: Optional[asyncio.Task] = None
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.connections.append(ws)
+        logger.info(f"Telemetry WebSocket connected ({len(self.connections)} clients)")
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.connections:
+            self.connections.remove(ws)
+        logger.info(f"Telemetry WebSocket disconnected ({len(self.connections)} clients)")
+
+    async def broadcast(self, data: dict):
+        dead = []
+        for ws in self.connections:
+            try:
+                await ws.send_json(data)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+    async def start_streaming(self, hz: float = 2.0):
+        """Background task that broadcasts telemetry at configured rate."""
+        interval = 1.0 / hz
+        while True:
+            try:
+                if self.connections:
+                    telemetry = registry.get_all_telemetry()
+
+                    # Add formation/orbit/search status
+                    for t in telemetry:
+                        drone_id = t["drone_id"]
+                        try:
+                            state = registry.get_drone(drone_id)
+                            t["task"] = state.current_task
+
+                            # Orbit progress
+                            if state.current_task == "orbiting":
+                                wps = getattr(state, '_orbit_waypoints', [])
+                                idx = getattr(state, '_orbit_index', 0)
+                                laps = getattr(state, '_orbit_laps_done', 0)
+                                t["orbit_progress"] = {
+                                    "waypoint": idx,
+                                    "total_waypoints": len(wps),
+                                    "laps_completed": laps,
+                                }
+
+                            # Search progress
+                            if state.current_task == "searching":
+                                wps = getattr(state, '_search_waypoints', [])
+                                idx = getattr(state, '_search_index', 0)
+                                t["search_progress"] = {
+                                    "waypoint": idx,
+                                    "total_waypoints": len(wps),
+                                    "pct_complete": round(100 * idx / max(1, len(wps)), 1),
+                                }
+                        except KeyError:
+                            pass
+
+                    await self.broadcast({
+                        "type": "telemetry",
+                        "drone_count": len(telemetry),
+                        "drones": telemetry,
+                    })
+
+                    # Advance orbits and searches for all drones
+                    drone_ids = registry.list_drones()
+                    for did in drone_ids:
+                        await _run_sync(router.advance_orbit, did)
+                        await _run_sync(router.advance_search, did)
+
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Telemetry broadcast error: {e}")
+                await asyncio.sleep(1.0)
+
+
+_telemetry_broadcaster = TelemetryBroadcaster()
+
+
+@app.on_event("startup")
+async def start_telemetry_stream():
+    _telemetry_broadcaster._task = asyncio.create_task(
+        _telemetry_broadcaster.start_streaming(hz=2.0)
+    )
+
+
+@app.on_event("shutdown")
+async def stop_telemetry_stream():
+    if _telemetry_broadcaster._task:
+        _telemetry_broadcaster._task.cancel()
+
+
+@app.websocket("/ws/telemetry")
+async def telemetry_websocket(ws: WebSocket):
+    """
+    Real-time telemetry stream for all drones.
+
+    Streams JSON at 2Hz with position, velocity, attitude, battery, and task status.
+    Also advances orbit/search waypoint tracking automatically.
+    """
+    await _telemetry_broadcaster.connect(ws)
+    try:
+        while True:
+            # Keep connection alive, listen for config messages
+            data = await ws.receive_text()
+            try:
+                msg = json.loads(data)
+                # Client can request rate change
+                if "hz" in msg:
+                    logger.info(f"Telemetry rate change requested: {msg['hz']}Hz")
+            except json.JSONDecodeError:
+                pass
+    except WebSocketDisconnect:
+        _telemetry_broadcaster.disconnect(ws)
 
 
 @app.get("/drones")
