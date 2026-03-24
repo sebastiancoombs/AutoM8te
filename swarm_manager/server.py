@@ -1,5 +1,5 @@
 """
-Swarm Manager FastAPI Server v0.6.0
+Swarm Manager FastAPI Server v0.7.0
 
 Exposes MCP tools to OpenClaw for drone control via pymavlink.
 All drone commands are synchronous (pymavlink is sync).
@@ -9,6 +9,7 @@ Runs in a thread pool to avoid blocking the event loop.
 import asyncio
 import json
 import logging
+import math
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -24,7 +25,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 from .drone_registry import DroneRegistry
 from .command_router import CommandRouter
-from .formations import SwarmMatrix, GPSPosition, assign_drones_to_slots, _ned_to_gps
+from .formations import SwarmMatrix, GPSPosition, assign_drones_to_slots, _ned_to_gps, get_easing
 
 # Configure logging
 logging.basicConfig(
@@ -49,7 +50,7 @@ def _run_sync(fn, *args, **kwargs):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
-    logger.info("AutoM8te Swarm Manager v0.6.0 starting up...")
+    logger.info("AutoM8te Swarm Manager v0.7.0 starting up...")
     yield
     logger.info("AutoM8te Swarm Manager shutting down...")
     registry.shutdown()
@@ -59,7 +60,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AutoM8te Swarm Manager",
     description="MCP server for voice-controlled drone swarm (pymavlink backend)",
-    version="0.5.0",
+    version="0.7.0",
     lifespan=lifespan,
 )
 
@@ -198,6 +199,19 @@ class CustomFormationRequest(BaseModel):
     center_lat: Optional[float] = Field(None, description="Center latitude (default: drone centroid)")
     center_lon: Optional[float] = Field(None, description="Center longitude (default: drone centroid)")
     transforms: Optional[list[dict]] = Field(None, description="Optional transforms to apply in order")
+
+
+class TransitionRequest(BaseModel):
+    from_formation: str = Field(..., description='Starting formation name')
+    to_formation: str = Field(..., description='Target formation name')
+    from_params: Optional[dict] = Field(None, description='Params for starting formation')
+    to_params: Optional[dict] = Field(None, description='Params for target formation')
+    center_lat: Optional[float] = Field(None, description='Center latitude')
+    center_lon: Optional[float] = Field(None, description='Center longitude')
+    num_steps: int = Field(20, description='Number of transition frames', ge=5, le=100)
+    duration_s: float = Field(5.0, description='Total transition duration in seconds', ge=1.0, le=60.0)
+    easing: str = Field('ease_in_out', description='Easing function: linear, ease_in_out, elastic, spring, etc.')
+    stagger: float = Field(0.0, description='Per-drone wave offset 0-1', ge=0.0, le=0.5)
 
 
 # ── Endpoints ───────────────────────────────────────────────
@@ -585,6 +599,96 @@ async def drone_formation_custom(req: CustomFormationRequest):
     if warning:
         response["warning"] = warning
     return response
+
+
+# ── Smooth Transition Engine ────────────────────────────────
+
+async def _run_transition(frames: list, drone_ids: list, current_positions: list,
+                          center_lat: float, center_lon: float, interval_s: float):
+    """Background task: iterate transition frames, send gotos for each."""
+    import numpy as _np
+    for frame in frames:
+        if asyncio.current_task().cancelled():
+            break
+        gps_targets = frame.to_gps(center_lat, center_lon)
+        slots = frame.to_slots()
+        assignments = assign_drones_to_slots(current_positions, slots, center_lat, center_lon)
+        for drone_idx, slot_idx in assignments:
+            did = drone_ids[drone_idx]
+            target = gps_targets[slot_idx]
+            await _run_sync(router.goto, did, target.lat, target.lon, target.alt_m, 0.0)
+        # Update current_positions for next frame's assignment
+        current_positions = [gps_targets[slot_idx] for _, slot_idx in assignments]
+        await asyncio.sleep(interval_s)
+
+
+@app.post("/tools/drone_transition")
+async def drone_transition(req: TransitionRequest):
+    """Smoothly transition between two formations with easing."""
+    drone_ids, current_positions, center_lat, center_lon = _get_current_positions_and_center(
+        req.center_lat, req.center_lon,
+    )
+    drone_count = len(drone_ids)
+
+    # Build 'from' SwarmMatrix
+    if req.from_formation.lower() == 'current':
+        import numpy as _np
+        coords = []
+        for p in current_positions:
+            # Convert GPS back to NED relative to center
+            north = (p.lat - center_lat) * (3.141592653589793 / 180) * 6371000.0
+            east = (p.lon - center_lon) * (3.141592653589793 / 180) * 6371000.0 * math.cos(math.radians(center_lat))
+            coords.append([north, east, p.alt_m])
+        from_matrix = SwarmMatrix(_np.array(coords, dtype=float))
+    else:
+        from_params = req.from_params or {}
+        try:
+            from_matrix = SwarmMatrix.from_formation(req.from_formation, drone_count, **from_params)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid from_formation: {e}")
+
+    # Build 'to' SwarmMatrix
+    to_params = req.to_params or {}
+    try:
+        to_matrix = SwarmMatrix.from_formation(req.to_formation, drone_count, **to_params)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid to_formation: {e}")
+
+    # Generate transition frames
+    frames = from_matrix.transition_steps(to_matrix, num_steps=req.num_steps,
+                                           easing=req.easing, stagger=req.stagger)
+
+    interval_s = req.duration_s / max(1, req.num_steps)
+
+    # Cancel any existing transition
+    existing = getattr(app.state, 'transition_task', None)
+    if existing and not existing.done():
+        existing.cancel()
+
+    # Spawn background task
+    app.state.transition_task = asyncio.create_task(
+        _run_transition(frames, drone_ids, current_positions,
+                        center_lat, center_lon, interval_s)
+    )
+
+    return {
+        "status": "success",
+        "message": f"Transition '{req.from_formation}' → '{req.to_formation}' started ({req.num_steps} steps over {req.duration_s}s)",
+        "num_steps": req.num_steps,
+        "duration_s": req.duration_s,
+        "easing": req.easing,
+        "stagger": req.stagger,
+    }
+
+
+@app.post("/tools/drone_transition_stop")
+async def drone_transition_stop():
+    """Cancel any running transition."""
+    task = getattr(app.state, 'transition_task', None)
+    if task and not task.done():
+        task.cancel()
+        return {"status": "success", "message": "Transition cancelled"}
+    return {"status": "success", "message": "No transition running"}
 
 
 # ── WebSocket Telemetry Stream ──────────────────────────────

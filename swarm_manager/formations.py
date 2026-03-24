@@ -508,6 +508,57 @@ def _expanding_square_search(
     return waypoints
 
 
+# ── Easing Functions ────────────────────────────────────────
+# Remap t (0→1) through curves for smooth animation.
+# All functions: f(0)=0, f(1)=1
+
+def ease_linear(t): return t
+
+def ease_in_quad(t): return t * t
+
+def ease_out_quad(t): return t * (2 - t)
+
+def ease_in_out_quad(t): return 2*t*t if t < 0.5 else -1 + (4 - 2*t) * t
+
+def ease_in_cubic(t): return t**3
+
+def ease_out_cubic(t): return 1 - (1-t)**3
+
+def ease_in_out_cubic(t): return 4*t**3 if t < 0.5 else 1 - (-2*t + 2)**3 / 2
+
+def ease_in_out_sine(t): return -(np.cos(np.pi * t) - 1) / 2
+
+def ease_elastic(t):
+    """Elastic ease-out — overshoots then settles. Great for 'bounce into place'."""
+    if t == 0 or t == 1: return t
+    c4 = (2 * np.pi) / 3
+    return 2**(-10*t) * np.sin((t*10 - 0.75) * c4) + 1
+
+def ease_spring(t, damping=0.5, frequency=4.0):
+    """Spring physics — oscillates and settles. Damping 0-1."""
+    return 1 - np.exp(-damping * 10 * t) * np.cos(frequency * np.pi * t)
+
+EASING_FUNCTIONS = {
+    'linear': ease_linear,
+    'ease_in': ease_in_quad,
+    'ease_out': ease_out_quad,
+    'ease_in_out': ease_in_out_cubic,
+    'ease_in_quad': ease_in_quad,
+    'ease_out_quad': ease_out_quad,
+    'ease_in_out_quad': ease_in_out_quad,
+    'ease_in_cubic': ease_in_cubic,
+    'ease_out_cubic': ease_out_cubic,
+    'ease_in_out_cubic': ease_in_out_cubic,
+    'ease_in_out_sine': ease_in_out_sine,
+    'elastic': ease_elastic,
+    'spring': ease_spring,
+}
+
+def get_easing(name: str):
+    """Get easing function by name. Returns ease_in_out_cubic if not found."""
+    return EASING_FUNCTIONS.get(name, ease_in_out_cubic)
+
+
 # ── Matrix-Based Formation Engine ────────────────────────────
 
 class SwarmMatrix:
@@ -645,9 +696,76 @@ class SwarmMatrix:
         blended = (1 - t) * self.positions + t * target.positions
         return SwarmMatrix(blended)
 
-    def transition_steps(self, target: 'SwarmMatrix', num_steps: int = 20) -> list:
-        """Generate a list of SwarmMatrix frames for smooth transition animation."""
-        return [self.interpolate_to(target, t) for t in np.linspace(0, 1, num_steps)]
+    def transition_steps(self, target: 'SwarmMatrix', num_steps: int = 20,
+                         easing: str = 'ease_in_out', stagger: float = 0.0) -> list:
+        """
+        Generate smooth transition frames from self to target.
+
+        Args:
+            target: Target formation (same drone count)
+            num_steps: Number of animation frames
+            easing: Easing function name (linear, ease_in_out, elastic, spring, etc.)
+            stagger: Per-drone time offset (0-1). 0 = all sync, 0.3 = wave effect.
+                     Each successive drone starts stagger*duration later.
+
+        Returns:
+            List of SwarmMatrix frames
+        """
+        ease_fn = get_easing(easing)
+        frames = []
+
+        for step in range(num_steps):
+            raw_t = step / max(1, num_steps - 1)
+            positions = np.zeros_like(self.positions)
+
+            for i in range(self.count):
+                # Apply stagger: each drone's effective t is offset
+                if stagger > 0 and self.count > 1:
+                    drone_offset = stagger * (i / (self.count - 1))
+                    drone_t = np.clip((raw_t - drone_offset) / (1 - stagger * (self.count - 1) / self.count + 1e-9), 0, 1)
+                else:
+                    drone_t = raw_t
+
+                # Apply easing
+                eased_t = float(ease_fn(drone_t))
+
+                # Interpolate this drone's position
+                positions[i] = (1 - eased_t) * self.positions[i] + eased_t * target.positions[i]
+
+            frames.append(SwarmMatrix(positions))
+
+        return frames
+
+    def transition_steps_bezier(self, target: 'SwarmMatrix', via: 'SwarmMatrix',
+                                 num_steps: int = 20, easing: str = 'ease_in_out') -> list:
+        """
+        Quadratic bezier transition through an intermediate formation.
+
+        Drones curve through 'via' on their way to 'target'.
+        B(t) = (1-t)²·P0 + 2(1-t)t·P1 + t²·P2
+
+        Args:
+            target: Final formation
+            via: Intermediate control point formation (drones curve toward this)
+            num_steps: Number of animation frames
+            easing: Easing function name
+        """
+        assert self.count == target.count == via.count
+        ease_fn = get_easing(easing)
+        frames = []
+
+        for step in range(num_steps):
+            raw_t = step / max(1, num_steps - 1)
+            eased_t = float(ease_fn(raw_t))
+
+            # Quadratic bezier: B(t) = (1-t)²·P0 + 2(1-t)t·P1 + t²·P2
+            positions = ((1 - eased_t)**2 * self.positions +
+                        2 * (1 - eased_t) * eased_t * via.positions +
+                        eased_t**2 * target.positions)
+
+            frames.append(SwarmMatrix(positions))
+
+        return frames
 
     # ── Analysis ──
 
