@@ -9,7 +9,7 @@ from .drone_registry import DroneRegistry, DroneState
 from .command_router import CommandRouter
 from .formations import get_formation, assign_drones_to_slots, FORMATIONS
 
-__version__ = "0.2.0"
+__version__ = "0.8.0"
 __all__ = [
     "DroneRegistry",
     "DroneState",

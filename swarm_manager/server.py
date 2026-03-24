@@ -1,5 +1,5 @@
 """
-Swarm Manager FastAPI Server v0.7.0
+Swarm Manager FastAPI Server v0.8.0
 
 Exposes MCP tools to OpenClaw for drone control via pymavlink.
 All drone commands are synchronous (pymavlink is sync).
@@ -26,6 +26,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 from .drone_registry import DroneRegistry
 from .command_router import CommandRouter
 from .formations import SwarmMatrix, GPSPosition, assign_drones_to_slots, _ned_to_gps, get_easing
+from .flight_paths import FlightPath, get_path_generator, PATH_GENERATORS
 
 # Configure logging
 logging.basicConfig(
@@ -50,7 +51,7 @@ def _run_sync(fn, *args, **kwargs):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
-    logger.info("AutoM8te Swarm Manager v0.7.0 starting up...")
+    logger.info("AutoM8te Swarm Manager v0.8.0 starting up...")
     yield
     logger.info("AutoM8te Swarm Manager shutting down...")
     registry.shutdown()
@@ -60,7 +61,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AutoM8te Swarm Manager",
     description="MCP server for voice-controlled drone swarm (pymavlink backend)",
-    version="0.7.0",
+    version="0.8.0",
     lifespan=lifespan,
 )
 
@@ -214,13 +215,34 @@ class TransitionRequest(BaseModel):
     stagger: float = Field(0.0, description='Per-drone wave offset 0-1', ge=0.0, le=0.5)
 
 
+class FollowPathRequest(BaseModel):
+    drone_id: str = Field(..., description='Target drone ID')
+    path_type: str = Field(..., description='Path type: straight, s_curve, zigzag, arc, spiral, ellipse, figure_eight, racetrack')
+    params: dict = Field(default_factory=dict, description='Path generator params (start, end, radius_m, etc.)')
+    easing: str = Field('ease_in_out', description='Easing function for speed along path')
+    duration_s: float = Field(10.0, description='Total flight duration in seconds', ge=1.0, le=300.0)
+    num_points: Optional[int] = Field(None, description='Override waypoint count')
+
+
+class CustomPathRequest(BaseModel):
+    drone_id: str = Field(..., description='Target drone ID')
+    waypoints: list = Field(..., description='List of [north, east, alt] waypoints in meters relative to drone current pos')
+    easing: str = Field('ease_in_out', description='Easing function')
+    duration_s: float = Field(10.0, description='Total flight duration', ge=1.0, le=300.0)
+    loop: bool = Field(False, description='Loop the path continuously')
+
+
+# ── Running path tasks (one per drone) ──────────────────────
+_path_tasks: dict[str, asyncio.Task] = {}
+
+
 # ── Endpoints ───────────────────────────────────────────────
 
 @app.get("/")
 async def root():
     return {
         "service": "AutoM8te Swarm Manager",
-        "version": "0.5.0",
+        "version": "0.8.0",
         "backend": "pymavlink",
         "registered_drones": registry.list_drones(),
     }
@@ -599,6 +621,124 @@ async def drone_formation_custom(req: CustomFormationRequest):
     if warning:
         response["warning"] = warning
     return response
+
+
+# ── Flight Path Executor ────────────────────────────────────
+
+async def _execute_path(drone_id: str, gps_waypoints: list, interval_s: float, loop: bool = False):
+    """Background task: drip-feed waypoints to a drone via goto."""
+    try:
+        while True:
+            for wp in gps_waypoints:
+                if asyncio.current_task().cancelled():
+                    return
+                await _run_sync(router.goto, drone_id, wp.lat, wp.lon, wp.alt_m, 0.0)
+                await asyncio.sleep(interval_s)
+            if not loop:
+                break
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _path_tasks.pop(drone_id, None)
+
+
+def _cancel_path_task(drone_id: str):
+    """Cancel any running path task for a drone."""
+    task = _path_tasks.pop(drone_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
+def _get_drone_origin(drone_id: str) -> tuple:
+    """Get a drone's current GPS position as (lat, lon, alt_m)."""
+    try:
+        state = registry.get_drone(drone_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Drone '{drone_id}' not registered")
+    return state.lat, state.lon, state.relative_alt_mm / 1000.0
+
+
+@app.post("/tools/drone_follow_path")
+async def drone_follow_path(req: FollowPathRequest):
+    """Have a drone follow a named path pattern (s-curve, zigzag, spiral, etc.)."""
+    lat, lon, alt = _get_drone_origin(req.drone_id)
+
+    try:
+        generator = get_path_generator(req.path_type)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    params = dict(req.params)
+    if req.num_points is not None:
+        params['num_points'] = req.num_points
+
+    try:
+        path = generator(**params)
+    except TypeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid params for '{req.path_type}': {e}")
+
+    path = path.with_easing(req.easing)
+    gps_waypoints = path.to_gps(lat, lon)
+    interval_s = req.duration_s / max(1, path.count)
+
+    _cancel_path_task(req.drone_id)
+    task = asyncio.create_task(_execute_path(req.drone_id, gps_waypoints, interval_s))
+    _path_tasks[req.drone_id] = task
+
+    return {
+        "status": "success",
+        "drone_id": req.drone_id,
+        "path_type": req.path_type,
+        "waypoint_count": path.count,
+        "duration_s": req.duration_s,
+        "easing": req.easing,
+    }
+
+
+@app.post("/tools/drone_custom_path")
+async def drone_custom_path(req: CustomPathRequest):
+    """Have a drone follow an arbitrary waypoint list (LLM-generated movement)."""
+    lat, lon, alt = _get_drone_origin(req.drone_id)
+
+    try:
+        path = FlightPath.from_points(req.waypoints)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid waypoints: {e}")
+
+    path = path.with_easing(req.easing)
+    gps_waypoints = path.to_gps(lat, lon)
+    interval_s = req.duration_s / max(1, path.count)
+
+    _cancel_path_task(req.drone_id)
+    task = asyncio.create_task(_execute_path(req.drone_id, gps_waypoints, interval_s, loop=req.loop))
+    _path_tasks[req.drone_id] = task
+
+    return {
+        "status": "success",
+        "drone_id": req.drone_id,
+        "path_type": "custom",
+        "waypoint_count": path.count,
+        "total_distance_m": round(path.total_distance, 1),
+        "duration_s": req.duration_s,
+        "easing": req.easing,
+        "loop": req.loop,
+    }
+
+
+@app.post("/tools/drone_path_stop")
+async def drone_path_stop(req: DroneIdRequest):
+    """Stop a drone's running path and hover in place."""
+    _cancel_path_task(req.drone_id)
+    result = await _run_sync(router.hover, req.drone_id)
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    return {"status": "success", "drone_id": req.drone_id, "message": "Path cancelled, hovering"}
+
+
+@app.get("/tools/path_types")
+async def path_types():
+    """List available path types."""
+    return {"path_types": list(PATH_GENERATORS.keys())}
 
 
 # ── Smooth Transition Engine ────────────────────────────────
