@@ -981,6 +981,86 @@ class CommandRouter:
             logger.error(f"{drone_id}: Resume failed: {e}")
             return {"status": "error", "message": f"Resume failed: {e}", "drone_id": drone_id}
 
+    def swarm_command(self, command: str, params: dict = None, drone_ids: list = None, reference_drone: str = None) -> dict:
+        """
+        Generic swarm command — send any single-drone command to multiple drones.
+
+        Args:
+            command: Single-drone method name (e.g. hover, goto, set_yaw)
+            params: Command parameters (drone_id auto-filled per drone)
+            drone_ids: Target drones (None = all registered)
+            reference_drone: Resolve this drone's position as target
+        """
+        ALLOWED_COMMANDS = [
+            'hover', 'set_yaw', 'change_speed', 'change_altitude', 'set_home',
+            'pause', 'resume', 'goto', 'takeoff', 'land', 'return_home',
+            'emergency_stop', 'set_velocity',
+        ]
+
+        if command not in ALLOWED_COMMANDS:
+            return {"status": "error", "message": f"Unknown or disallowed command: {command}. Allowed: {ALLOWED_COMMANDS}"}
+
+        if drone_ids is None:
+            drone_ids = self.registry.list_drones()
+
+        if not drone_ids:
+            return {"status": "error", "message": "No target drones"}
+
+        target_ids = list(drone_ids)
+        ref_state = None
+
+        if reference_drone:
+            try:
+                ref_state = self._get_state(reference_drone)
+            except KeyError:
+                return {"status": "error", "message": f"Reference drone '{reference_drone}' not found"}
+
+            ref_lat = ref_state.lat
+            ref_lon = ref_state.lon
+            ref_alt = ref_state.relative_alt_mm / 1000.0
+
+            # Exclude reference drone from targets for goto-style commands
+            target_ids = [d for d in target_ids if d != reference_drone]
+
+            if not target_ids:
+                return {"status": "error", "message": "No target drones after excluding reference drone"}
+
+        results = []
+        for drone_id in target_ids:
+            kwargs = dict(params) if params else {}
+            kwargs['drone_id'] = drone_id
+
+            if reference_drone and ref_state:
+                if command == 'goto':
+                    kwargs['lat'] = ref_lat
+                    kwargs['lon'] = ref_lon
+                    kwargs['alt_m'] = ref_alt
+                elif command == 'change_altitude':
+                    kwargs['alt_m'] = ref_alt
+                elif command == 'set_yaw':
+                    try:
+                        drone_state = self._get_state(drone_id)
+                        drone_lat = drone_state.lat
+                        drone_lon = drone_state.lon
+                        bearing = math.degrees(math.atan2(ref_lon - drone_lon, ref_lat - drone_lat)) % 360
+                        kwargs['heading_deg'] = bearing
+                    except KeyError:
+                        pass
+
+            try:
+                result = getattr(self, command)(**kwargs)
+                results.append(result)
+            except Exception as e:
+                results.append({"status": "error", "message": str(e), "drone_id": drone_id})
+
+        return {
+            "status": "success",
+            "message": f"Swarm command {command} sent to {len(results)} drones",
+            "command": command,
+            "results": results,
+            "drone_ids": target_ids,
+        }
+
     def broadcast(self, command: str, **kwargs) -> dict:
         """Send command to all registered drones."""
         logger.info(f"Broadcast: {command}")

@@ -1,5 +1,5 @@
 """
-Swarm Manager FastAPI Server v0.4.0
+Swarm Manager FastAPI Server v0.5.0
 
 Exposes MCP tools to OpenClaw for drone control via pymavlink.
 All drone commands are synchronous (pymavlink is sync).
@@ -48,7 +48,7 @@ def _run_sync(fn, *args, **kwargs):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
-    logger.info("AutoM8te Swarm Manager v0.4.0 starting up...")
+    logger.info("AutoM8te Swarm Manager v0.5.0 starting up...")
     yield
     logger.info("AutoM8te Swarm Manager shutting down...")
     registry.shutdown()
@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AutoM8te Swarm Manager",
     description="MCP server for voice-controlled drone swarm (pymavlink backend)",
-    version="0.4.0",
+    version="0.5.0",
     lifespan=lifespan,
 )
 
@@ -134,6 +134,13 @@ class BroadcastRequest(BaseModel):
     altitude_m: Optional[float] = Field(5.0, description="Altitude for takeoff")
 
 
+class SwarmCommandRequest(BaseModel):
+    command: str = Field(..., description="Single-drone command name (e.g. hover, goto, set_yaw)")
+    params: Optional[dict] = Field(None, description="Command parameters (drone_id auto-filled)")
+    drone_ids: Optional[list[str]] = Field(None, description="Target drones (null=all)")
+    reference_drone: Optional[str] = Field(None, description="Resolve this drone position as target")
+
+
 class OrbitRequest(BaseModel):
     drone_id: str = Field(..., description="Target drone ID")
     center_lat: float = Field(..., description="Center latitude")
@@ -180,7 +187,7 @@ class SearchSwarmRequest(BaseModel):
 async def root():
     return {
         "service": "AutoM8te Swarm Manager",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "backend": "pymavlink",
         "registered_drones": registry.list_drones(),
     }
@@ -343,6 +350,15 @@ async def drone_broadcast(req: BroadcastRequest):
     if req.command == "takeoff":
         kwargs["altitude_m"] = req.altitude_m
     result = await _run_sync(router.broadcast, req.command, **kwargs)
+    return result
+
+
+@app.post("/tools/drone_swarm_command")
+async def drone_swarm_command(req: SwarmCommandRequest):
+    """Send any single-drone command to multiple drones (generic swarm broadcast)."""
+    result = await _run_sync(router.swarm_command, req.command, req.params, req.drone_ids, req.reference_drone)
+    if result["status"] == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
     return result
 
 
