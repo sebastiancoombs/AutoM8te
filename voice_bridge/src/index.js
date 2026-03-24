@@ -1,32 +1,82 @@
 /**
- * AutoM8te Voice Bridge
+ * OpenClaw Discord Realtime Voice Bridge
  *
- * Bridges Discord voice ↔ OpenAI Realtime API for sub-500ms voice drone control.
+ * Bridges Discord voice ↔ OpenAI Realtime API for sub-500ms voice control
+ * of any HTTP-accessible service via configurable function calling tools.
  *
  * Architecture:
  *   Discord Voice Channel (user speaks)
  *     → Opus decode → PCM 24kHz mono
  *     → OpenAI Realtime API WebSocket
  *     → Model: STT + reasoning + function calling + TTS in ONE pass
- *     → Function calls → HTTP to Swarm Manager (localhost:8000)
+ *     → Function calls → HTTP to configured endpoints
  *     → Audio response → PCM 24kHz mono
  *     → Upsample → Opus encode → Discord voice channel
  *
  * Target latency: ~300-500ms from user speech end to AI response start.
+ *
+ * Usage:
+ *   node src/index.js [--config path/to/config.json] [--tools path/to/tools.json]
  */
 
 import 'dotenv/config';
+import { readFileSync, existsSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { Client, GatewayIntentBits, Events } from 'discord.js';
 import { DiscordVoice } from './discord-voice.js';
 import { RealtimeClient } from './realtime-client.js';
+import { loadTools } from './tools.js';
 
-// ── Validate config ──
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(__dirname, '..');
 
-const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
-const OPENAI_KEY = process.env.OPENAI_API_KEY;
-const GUILD_ID = process.env.DISCORD_GUILD_ID;
-const VOICE_CHANNEL_ID = process.env.DISCORD_VOICE_CHANNEL_ID;
-const LISTEN_USER_ID = process.env.DISCORD_LISTEN_USER_ID;
+// ── Parse CLI flags ──
+
+function getArg(flag) {
+  const idx = process.argv.indexOf(flag);
+  return idx !== -1 ? process.argv[idx + 1] : null;
+}
+
+const configPath = getArg('--config') || resolve(ROOT, 'config.json');
+const toolsPath  = getArg('--tools')  || resolve(ROOT, 'tools.json');
+
+// ── Load config ──
+
+function loadConfig(path) {
+  const absPath = resolve(path);
+  if (!existsSync(absPath)) {
+    console.warn(`[CONFIG] No config file found at ${absPath}, using defaults.`);
+    return {};
+  }
+  const raw = readFileSync(absPath, 'utf8');
+  const config = JSON.parse(raw);
+  console.log(`[CONFIG] Loaded from ${absPath}`);
+  return config;
+}
+
+const appConfig = loadConfig(configPath);
+
+// ── Load tools ──
+
+let realtimeTools = [];
+let executeToolFn = null;
+
+if (existsSync(resolve(toolsPath))) {
+  const loaded = loadTools(toolsPath);
+  realtimeTools = loaded.tools;
+  executeToolFn = loaded.executeTool;
+} else {
+  console.warn(`[TOOLS] No tools file found at ${toolsPath}. Running without function calling.`);
+}
+
+// ── Validate environment ──
+
+const DISCORD_TOKEN      = process.env.DISCORD_BOT_TOKEN;
+const OPENAI_KEY         = process.env.OPENAI_API_KEY;
+const GUILD_ID           = process.env.DISCORD_GUILD_ID;
+const VOICE_CHANNEL_ID   = process.env.DISCORD_VOICE_CHANNEL_ID;
+const LISTEN_USER_ID     = process.env.DISCORD_LISTEN_USER_ID;
 
 if (!DISCORD_TOKEN) {
   console.error('❌ DISCORD_BOT_TOKEN not set. See .env.example');
@@ -36,6 +86,13 @@ if (!OPENAI_KEY) {
   console.error('❌ OPENAI_API_KEY not set. See .env.example');
   process.exit(1);
 }
+
+// ── Resolved config (CLI env overrides config.json) ──
+
+const model        = process.env.OPENAI_REALTIME_MODEL || appConfig.model        || 'gpt-realtime';
+const voice        = process.env.OPENAI_VOICE          || appConfig.voice        || 'coral';
+const systemPrompt = appConfig.systemPrompt || 'You are a voice assistant. Execute commands immediately. Be concise.';
+const turnDetection = appConfig.turnDetection || 'semantic_vad';
 
 // ── Discord client ──
 
@@ -48,7 +105,7 @@ const discord = new Client({
   ],
 });
 
-const voice = new DiscordVoice();
+const discordVoice = new DiscordVoice();
 let realtime = null;
 let isStreamingResponse = false;
 
@@ -56,8 +113,8 @@ let isStreamingResponse = false;
 
 discord.once(Events.ClientReady, async (client) => {
   console.log(`[BOT] Logged in as ${client.user.tag}`);
+  console.log(`[BOT] Model: ${model} | Voice: ${voice} | Tools: ${realtimeTools.length}`);
 
-  // Auto-join voice channel if configured
   if (VOICE_CHANNEL_ID && GUILD_ID) {
     const guild = client.guilds.cache.get(GUILD_ID);
     if (guild) {
@@ -65,11 +122,11 @@ discord.once(Events.ClientReady, async (client) => {
       if (channel?.isVoiceBased()) {
         await startVoiceBridge(channel);
       } else {
-        console.error(`❌ Voice channel ${VOICE_CHANNEL_ID} not found in guild`);
+        console.error(`❌ Voice channel ${VOICE_CHANNEL_ID} not found in guild ${GUILD_ID}`);
       }
     }
   } else {
-    console.log('[BOT] No auto-join configured. Use !join in a text channel while in voice.');
+    console.log('[BOT] No auto-join configured. Use !join in a text channel while in a voice channel.');
   }
 });
 
@@ -78,7 +135,6 @@ discord.once(Events.ClientReady, async (client) => {
 discord.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  // !join — join the user's voice channel
   if (message.content === '!join') {
     const voiceChannel = message.member?.voice?.channel;
     if (!voiceChannel) {
@@ -86,18 +142,16 @@ discord.on(Events.MessageCreate, async (message) => {
       return;
     }
     await startVoiceBridge(voiceChannel);
-    await message.reply(`🎙️ Joined **${voiceChannel.name}**. Voice drone control active.`);
+    await message.reply(`🎙️ Joined **${voiceChannel.name}**. Voice control active.`);
   }
 
-  // !leave — leave voice channel
   if (message.content === '!leave') {
-    voice.leave();
+    discordVoice.leave();
     realtime?.disconnect();
     realtime = null;
     await message.reply('👋 Left voice channel.');
   }
 
-  // !say <text> — send text to Realtime API (for testing)
   if (message.content.startsWith('!say ')) {
     const text = message.content.slice(5);
     if (realtime) {
@@ -108,16 +162,18 @@ discord.on(Events.MessageCreate, async (message) => {
     }
   }
 
-  // !status — show connection status
   if (message.content === '!status') {
-    const connected = realtime?._connected ? '✅' : '❌';
-    const voiceConn = voice.connection ? '✅' : '❌';
+    const realtimeStatus = realtime?._connected ? '✅' : '❌';
+    const voiceStatus    = discordVoice.connection ? '✅' : '❌';
     await message.reply(
-      `**AutoM8te Voice Bridge**\n` +
-      `Discord voice: ${voiceConn}\n` +
-      `Realtime API: ${connected}\n` +
-      `Model: ${process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime'}\n` +
-      `Voice: ${process.env.OPENAI_VOICE || 'coral'}`
+      `**OpenClaw Discord Realtime Voice Bridge**\n` +
+      `Discord voice: ${voiceStatus}\n` +
+      `Realtime API: ${realtimeStatus}\n` +
+      `Model: ${model}\n` +
+      `Voice: ${voice}\n` +
+      `Tools: ${realtimeTools.length} loaded\n` +
+      `Config: ${configPath}\n` +
+      `Tools config: ${toolsPath}`
     );
   }
 });
@@ -127,67 +183,65 @@ discord.on(Events.MessageCreate, async (message) => {
 async function startVoiceBridge(channel) {
   console.log('[BRIDGE] Starting voice bridge...');
 
-  // 1. Join Discord voice
-  await voice.join(channel);
+  await discordVoice.join(channel);
 
-  // 2. Connect to OpenAI Realtime API
   realtime = new RealtimeClient(OPENAI_KEY, {
-    model: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime',
-    voice: process.env.OPENAI_VOICE || 'coral',
+    model,
+    voice,
+    systemPrompt,
+    turnDetection,
+    tools: realtimeTools,
+    executeTool: executeToolFn,
   });
 
-  // 3. Wire audio: Discord → Realtime API
-  voice.on('audio', (pcmChunk) => {
+  // Discord → Realtime API
+  discordVoice.on('audio', (pcmChunk) => {
     realtime.sendAudio(pcmChunk);
   });
 
-  // 4. Wire audio: Realtime API → Discord
+  // Barge-in: stop playback when user starts speaking
   realtime.on('speech_started', () => {
-    // User started speaking — stop any current playback to allow barge-in
     if (isStreamingResponse) {
-      voice.endPlayback();
+      discordVoice.endPlayback();
       isStreamingResponse = false;
     }
   });
 
+  // Realtime API → Discord
   realtime.on('audio', (pcmChunk) => {
     if (!isStreamingResponse) {
-      // Start a new playback stream for this response
-      voice.startPlayback();
+      discordVoice.startPlayback();
       isStreamingResponse = true;
     }
-    voice.appendAudio(pcmChunk);
+    discordVoice.appendAudio(pcmChunk);
   });
 
   realtime.on('audio_done', () => {
-    voice.endPlayback();
+    discordVoice.endPlayback();
     isStreamingResponse = false;
   });
 
-  // 5. Logging
   realtime.on('user_transcript', (text) => {
     console.log(`🎤 User: ${text}`);
   });
 
   realtime.on('assistant_transcript', (text) => {
-    console.log(`🤖 AutoM8te: ${text}`);
+    console.log(`🤖 Assistant: ${text}`);
   });
 
   realtime.on('error', (err) => {
     console.error('[BRIDGE] Realtime error:', err.message);
   });
 
-  // 6. Connect Realtime API
   realtime.connect();
 
-  // 7. Start listening to voice
   realtime.once('ready', () => {
     if (LISTEN_USER_ID) {
-      voice.listenTo(LISTEN_USER_ID);
+      discordVoice.listenTo(LISTEN_USER_ID);
     } else {
-      voice.listenToAll();
+      discordVoice.listenToAll();
     }
-    console.log('[BRIDGE] ✅ Voice bridge active. Speak to control drones.');
+    console.log('[BRIDGE] ✅ Voice bridge active.');
   });
 }
 
@@ -195,7 +249,7 @@ async function startVoiceBridge(channel) {
 
 process.on('SIGINT', () => {
   console.log('\n[BRIDGE] Shutting down...');
-  voice.leave();
+  discordVoice.leave();
   realtime?.disconnect();
   discord.destroy();
   process.exit(0);
@@ -203,5 +257,7 @@ process.on('SIGINT', () => {
 
 // ── Start ──
 
-console.log('🚁 AutoM8te Voice Bridge starting...');
+console.log('🎙️ OpenClaw Discord Realtime Voice Bridge starting...');
+console.log(`   Config: ${configPath}`);
+console.log(`   Tools:  ${toolsPath}`);
 discord.login(DISCORD_TOKEN);

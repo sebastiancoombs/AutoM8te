@@ -1,0 +1,6 @@
+{
+  "systemPrompt": "You are a voice assistant. Execute commands immediately. Be concise.",
+  "voice": "coral",
+  "model": "gpt-realtime",
+  "turnDetection": "semantic_vad"
+}

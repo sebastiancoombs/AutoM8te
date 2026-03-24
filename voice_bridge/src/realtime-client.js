@@ -5,36 +5,27 @@
 
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
-import { DRONE_TOOLS, executeTool } from './drone-tools.js';
-
-const SYSTEM_PROMPT = `You are AutoM8te, an AI drone swarm commander. You control drones via voice in real-time.
-
-Rules:
-- Execute drone commands IMMEDIATELY when asked. Don't ask for confirmation.
-- Be concise. Max 1-2 sentences per response.
-- Default drone is drone_1 unless specified.
-- Default takeoff altitude is 10 meters unless specified.
-- When user says "all drones", use drone_broadcast or iterate all.
-- For formations, use drone_formation with the specified type.
-- Speak like a military copilot: crisp, confident, brief.
-- When asked for status, call drone_query or list_drones and read back key telemetry.
-- If you don't know which drone, assume drone_1.
-
-Available drones: drone_1 through drone_5 (SITL simulation)
-Drone home location: Canberra, Australia (-35.3632, 149.1652)
-
-Examples:
-- "Take off" → call drone_takeoff(drone_1, 10)
-- "V formation" → call drone_formation("v", 10, 10)
-- "Land all drones" → call drone_broadcast("land")
-- "Status" → call list_drones() and read back`;
 
 export class RealtimeClient extends EventEmitter {
+  /**
+   * @param {string} apiKey - OpenAI API key
+   * @param {object} opts
+   * @param {string} opts.model - Realtime model ID
+   * @param {string} opts.voice - TTS voice
+   * @param {string} opts.systemPrompt - System prompt / instructions
+   * @param {string} opts.turnDetection - VAD mode (e.g. 'semantic_vad')
+   * @param {Array}  opts.tools - OpenAI Realtime tool definitions
+   * @param {Function} opts.executeTool - Tool executor function
+   */
   constructor(apiKey, opts = {}) {
     super();
     this.apiKey = apiKey;
     this.model = opts.model || 'gpt-realtime';
     this.voice = opts.voice || 'coral';
+    this.systemPrompt = opts.systemPrompt || 'You are a voice assistant. Be concise.';
+    this.turnDetection = opts.turnDetection || 'semantic_vad';
+    this.tools = opts.tools || [];
+    this.executeTool = opts.executeTool || null;
     this.ws = null;
     this._connected = false;
   }
@@ -73,30 +64,29 @@ export class RealtimeClient extends EventEmitter {
   }
 
   _configureSession() {
-    // Configure session with tools, voice, VAD
     this._send({
       type: 'session.update',
       session: {
         type: 'realtime',
         model: this.model,
-        instructions: SYSTEM_PROMPT,
+        instructions: this.systemPrompt,
         output_modalities: ['audio'],
         audio: {
           input: {
             format: { type: 'audio/pcm', rate: 24000 },
-            turn_detection: { type: 'semantic_vad' },
+            turn_detection: { type: this.turnDetection },
           },
           output: {
             format: { type: 'audio/pcm' },
             voice: this.voice,
           },
         },
-        tools: DRONE_TOOLS,
-        tool_choice: 'auto',
+        tools: this.tools,
+        tool_choice: this.tools.length > 0 ? 'auto' : 'none',
       },
     });
 
-    console.log(`[REALTIME] Session configured: voice=${this.voice}, ${DRONE_TOOLS.length} tools`);
+    console.log(`[REALTIME] Session configured: voice=${this.voice}, ${this.tools.length} tools`);
     this.emit('ready');
   }
 
@@ -155,11 +145,11 @@ export class RealtimeClient extends EventEmitter {
         break;
 
       // ── Audio output (stream to Discord) ──
-      case 'response.audio.delta':
-        // Base64 PCM audio chunk from the model
+      case 'response.audio.delta': {
         const audioBuffer = Buffer.from(event.delta, 'base64');
         this.emit('audio', audioBuffer);
         break;
+      }
 
       case 'response.audio.done':
         this.emit('audio_done');
@@ -171,11 +161,15 @@ export class RealtimeClient extends EventEmitter {
           const { name, call_id, arguments: argsStr } = event.item;
           console.log(`[REALTIME] Function call: ${name}(${argsStr})`);
 
+          if (!this.executeTool) {
+            console.warn(`[REALTIME] No executeTool set — skipping function call: ${name}`);
+            break;
+          }
+
           try {
             const args = JSON.parse(argsStr);
-            const result = await executeTool(name, args);
+            const result = await this.executeTool(name, args);
 
-            // Send function result back
             this._send({
               type: 'conversation.item.create',
               item: {
@@ -184,8 +178,6 @@ export class RealtimeClient extends EventEmitter {
                 output: result,
               },
             });
-
-            // Trigger response generation with the tool result
             this._send({ type: 'response.create' });
           } catch (err) {
             console.error(`[REALTIME] Function call error:`, err);
@@ -227,7 +219,6 @@ export class RealtimeClient extends EventEmitter {
         break;
 
       case 'rate_limits.updated':
-        // Track rate limits if needed
         break;
 
       default:

@@ -1,9 +1,12 @@
 {
-  "name": "autom8te-voice-bridge",
-  "version": "0.1.0",
-  "description": "Discord voice -> OpenAI Realtime API bridge for drone swarm control",
+  "name": "openclaw-discord-realtime",
+  "version": "1.0.0",
+  "description": "Sub-500ms voice control for anything via Discord voice + OpenAI Realtime API with configurable function calling tools",
   "type": "module",
   "main": "src/index.js",
+  "bin": {
+    "openclaw-discord-realtime": "src/index.js"
+  },
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js"
