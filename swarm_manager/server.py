@@ -1,5 +1,5 @@
 """
-Swarm Manager FastAPI Server v0.5.0
+Swarm Manager FastAPI Server v0.6.0
 
 Exposes MCP tools to OpenClaw for drone control via pymavlink.
 All drone commands are synchronous (pymavlink is sync).
@@ -24,6 +24,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 from .drone_registry import DroneRegistry
 from .command_router import CommandRouter
+from .formations import SwarmMatrix, GPSPosition, assign_drones_to_slots, _ned_to_gps
 
 # Configure logging
 logging.basicConfig(
@@ -48,7 +49,7 @@ def _run_sync(fn, *args, **kwargs):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
-    logger.info("AutoM8te Swarm Manager v0.5.0 starting up...")
+    logger.info("AutoM8te Swarm Manager v0.6.0 starting up...")
     yield
     logger.info("AutoM8te Swarm Manager shutting down...")
     registry.shutdown()
@@ -179,6 +180,24 @@ class SearchSwarmRequest(BaseModel):
     alt_m: float = Field(20.0, description="Search altitude in meters")
     pattern: str = Field("grid", description="Search pattern: grid, spiral, expanding")
     swath_width_m: float = Field(30.0, description="Swath width in meters")
+
+
+class TransformFormationRequest(BaseModel):
+    formation: str = Field(..., description="Base formation name (line, v, circle, grid, stack)")
+    drone_count: Optional[int] = Field(None, description="Number of drones (default: registered count)")
+    spacing_m: float = Field(10.0, description="Spacing between drones in meters")
+    alt_m: float = Field(10.0, description="Formation altitude in meters")
+    center_lat: Optional[float] = Field(None, description="Center latitude (default: drone centroid)")
+    center_lon: Optional[float] = Field(None, description="Center longitude (default: drone centroid)")
+    heading_deg: float = Field(0.0, description="Formation heading (for line/v)")
+    transforms: list[dict] = Field(default_factory=list, description="Transforms to apply in order, e.g. [{'rotate_z': 45}, {'scale': 1.5}]")
+
+
+class CustomFormationRequest(BaseModel):
+    coordinates: list[list[float]] = Field(..., description="List of [north, east, alt] coords per drone")
+    center_lat: Optional[float] = Field(None, description="Center latitude (default: drone centroid)")
+    center_lon: Optional[float] = Field(None, description="Center longitude (default: drone centroid)")
+    transforms: Optional[list[dict]] = Field(None, description="Optional transforms to apply in order")
 
 
 # ── Endpoints ───────────────────────────────────────────────
@@ -408,6 +427,164 @@ async def drone_search_swarm(req: SearchSwarmRequest):
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
     return result
+
+
+def _get_current_positions_and_center(center_lat, center_lon):
+    """Helper: get current drone GPS positions and resolve center point."""
+    drone_ids = registry.list_drones()
+    if len(drone_ids) < 1:
+        raise HTTPException(status_code=400, detail="No drones registered")
+
+    current_positions = []
+    for did in drone_ids:
+        state = registry.get_drone(did)
+        current_positions.append(GPSPosition(
+            lat=state.lat, lon=state.lon,
+            alt_m=state.relative_alt_mm / 1000.0,
+        ))
+
+    if center_lat is None or center_lon is None:
+        center_lat = sum(p.lat for p in current_positions) / len(current_positions)
+        center_lon = sum(p.lon for p in current_positions) / len(current_positions)
+
+    return drone_ids, current_positions, center_lat, center_lon
+
+
+def _apply_transforms(matrix: SwarmMatrix, transforms: list[dict]) -> SwarmMatrix:
+    """Apply a list of transform dicts to a SwarmMatrix in order."""
+    for t in transforms:
+        for op, val in t.items():
+            if op == "rotate_z":
+                matrix = matrix.rotate_z(float(val))
+            elif op == "rotate_x":
+                matrix = matrix.rotate_x(float(val))
+            elif op == "rotate_y":
+                matrix = matrix.rotate_y(float(val))
+            elif op == "scale":
+                matrix = matrix.scale(float(val))
+            elif op == "scale_axes":
+                matrix = matrix.scale_axes(**val)
+            elif op == "translate":
+                matrix = matrix.translate(**val)
+            elif op == "set_altitude":
+                matrix = matrix.set_altitude(float(val))
+            elif op == "mirror_north":
+                matrix = matrix.mirror_north()
+            elif op == "mirror_east":
+                matrix = matrix.mirror_east()
+            else:
+                raise HTTPException(status_code=400, detail=f"Unknown transform: {op}")
+    return matrix
+
+
+def _assign_and_send(matrix: SwarmMatrix, drone_ids, current_positions, center_lat, center_lon, heading_deg=0.0):
+    """Convert SwarmMatrix to slots, run Hungarian assignment, send gotos."""
+    slots = matrix.to_slots()
+    assignments = assign_drones_to_slots(current_positions, slots, center_lat, center_lon)
+
+    results = []
+    assignment_details = []
+    for drone_idx, slot_idx in assignments:
+        did = drone_ids[drone_idx]
+        slot = slots[slot_idx]
+        target = _ned_to_gps(center_lat, center_lon, slot.north_m, slot.east_m, slot.alt_m)
+        result = router.goto(did, target.lat, target.lon, target.alt_m, heading_deg)
+        results.append(result)
+        assignment_details.append({
+            "drone": did,
+            "slot": slot_idx,
+            "target": {"lat": target.lat, "lon": target.lon, "alt_m": target.alt_m},
+        })
+
+    return assignments, assignment_details, results
+
+
+@app.post("/tools/drone_formation_transform")
+async def drone_formation_transform(req: TransformFormationRequest):
+    """Create a formation with matrix transforms applied (rotate, scale, translate, etc.)."""
+    drone_ids, current_positions, center_lat, center_lon = _get_current_positions_and_center(
+        req.center_lat, req.center_lon,
+    )
+
+    drone_count = req.drone_count or len(drone_ids)
+
+    # Build formation kwargs
+    form_kwargs = {"spacing_m": req.spacing_m, "alt_m": req.alt_m}
+    if req.formation.lower() in ("line", "v", "vee"):
+        form_kwargs["heading_deg"] = req.heading_deg
+    if req.formation.lower() in ("circle", "ring"):
+        form_kwargs = {"radius_m": req.spacing_m, "alt_m": req.alt_m}
+
+    try:
+        matrix = SwarmMatrix.from_formation(req.formation, drone_count, **form_kwargs)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    matrix = _apply_transforms(matrix, req.transforms)
+
+    # Check separation
+    sep_ok, min_sep = matrix.check_separation(min_dist_m=3.0)
+    warning = None
+    if not sep_ok:
+        warning = f"Warning: minimum separation is {min_sep:.1f}m (< 3m)"
+        logger.warning(warning)
+
+    assignments, assignment_details, results = await _run_sync(
+        _assign_and_send, matrix, drone_ids, current_positions, center_lat, center_lon, req.heading_deg,
+    )
+
+    response = {
+        "status": "success",
+        "message": f"Formation '{req.formation}' with {len(req.transforms)} transforms applied to {len(drone_ids)} drones",
+        "formation": req.formation,
+        "transforms_applied": len(req.transforms),
+        "assignments": assignment_details,
+        "bounding_box": matrix.bounding_box(),
+        "min_separation_m": min_sep,
+        "results": results,
+    }
+    if warning:
+        response["warning"] = warning
+    return response
+
+
+@app.post("/tools/drone_formation_custom")
+async def drone_formation_custom(req: CustomFormationRequest):
+    """Send drones to arbitrary coordinates (LLM-generated shapes)."""
+    drone_ids, current_positions, center_lat, center_lon = _get_current_positions_and_center(
+        req.center_lat, req.center_lon,
+    )
+
+    try:
+        matrix = SwarmMatrix.from_coordinates([tuple(c) for c in req.coordinates])
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid coordinates: {e}")
+
+    if req.transforms:
+        matrix = _apply_transforms(matrix, req.transforms)
+
+    sep_ok, min_sep = matrix.check_separation(min_dist_m=3.0)
+    warning = None
+    if not sep_ok:
+        warning = f"Warning: minimum separation is {min_sep:.1f}m (< 3m)"
+        logger.warning(warning)
+
+    assignments, assignment_details, results = await _run_sync(
+        _assign_and_send, matrix, drone_ids, current_positions, center_lat, center_lon,
+    )
+
+    response = {
+        "status": "success",
+        "message": f"Custom formation with {matrix.count} positions applied to {len(drone_ids)} drones",
+        "drone_count": matrix.count,
+        "assignments": assignment_details,
+        "bounding_box": matrix.bounding_box(),
+        "min_separation_m": min_sep,
+        "results": results,
+    }
+    if warning:
+        response["warning"] = warning
+    return response
 
 
 # ── WebSocket Telemetry Stream ──────────────────────────────

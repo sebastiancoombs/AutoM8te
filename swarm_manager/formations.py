@@ -14,6 +14,12 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+try:
+    import numpy as np
+except ImportError:
+    np = None
+    logging.getLogger(__name__).warning("numpy not installed — SwarmMatrix will not be available")
+
 logger = logging.getLogger(__name__)
 
 # Earth radius for coordinate math
@@ -500,3 +506,206 @@ def _expanding_square_search(
         leg += 1
 
     return waypoints
+
+
+# ── Matrix-Based Formation Engine ────────────────────────────
+
+class SwarmMatrix:
+    """
+    Matrix-based formation representation for linear algebra operations.
+
+    Each formation is an Nx3 numpy array where each row is [north_m, east_m, alt_m].
+    All transformations return new SwarmMatrix instances (immutable pattern).
+    Can convert to/from FormationSlot lists for backward compatibility.
+    """
+
+    def __init__(self, positions: 'np.ndarray'):
+        if np is None:
+            raise RuntimeError("numpy is required for SwarmMatrix")
+        assert positions.ndim == 2 and positions.shape[1] == 3
+        self.positions = positions.copy()
+
+    @property
+    def count(self) -> int:
+        return len(self.positions)
+
+    @property
+    def centroid(self) -> 'np.ndarray':
+        return self.positions.mean(axis=0)
+
+    # ── Constructors ──
+
+    @classmethod
+    def from_slots(cls, slots: list) -> 'SwarmMatrix':
+        """Convert FormationSlot list to SwarmMatrix."""
+        arr = np.array([[s.north_m, s.east_m, s.alt_m] for s in slots])
+        return cls(arr)
+
+    @classmethod
+    def from_formation(cls, name: str, drone_count: int, **kwargs) -> 'SwarmMatrix':
+        """Generate a formation by name and wrap as SwarmMatrix."""
+        slots = get_formation(name, drone_count, **kwargs)
+        return cls.from_slots(slots)
+
+    @classmethod
+    def from_coordinates(cls, coords: list[tuple]) -> 'SwarmMatrix':
+        """Create from a list of (north, east, alt) tuples. For LLM-generated shapes."""
+        return cls(np.array(coords, dtype=float))
+
+    @classmethod
+    def from_2d_shape(cls, xy_coords: list[tuple], alt_m: float = 10.0) -> 'SwarmMatrix':
+        """Create from 2D shape coords [(x,y), ...], all at same altitude. For letters/logos."""
+        arr = np.zeros((len(xy_coords), 3))
+        for i, (x, y) in enumerate(xy_coords):
+            arr[i] = [y, x, alt_m]  # x->east, y->north
+        return cls(arr)
+
+    # ── Transforms (all return new SwarmMatrix) ──
+
+    def rotate_z(self, angle_deg: float) -> 'SwarmMatrix':
+        """Rotate formation around vertical axis (yaw). Preserves altitudes."""
+        rad = np.radians(angle_deg)
+        c, s = np.cos(rad), np.sin(rad)
+        R = np.array([[c, -s, 0],
+                       [s,  c, 0],
+                       [0,  0, 1]])
+        centered = self.positions - self.centroid
+        rotated = centered @ R.T + self.centroid
+        return SwarmMatrix(rotated)
+
+    def rotate_x(self, angle_deg: float) -> 'SwarmMatrix':
+        """Tilt formation forward/backward (pitch)."""
+        rad = np.radians(angle_deg)
+        c, s = np.cos(rad), np.sin(rad)
+        R = np.array([[1, 0, 0],
+                       [0, c, -s],
+                       [0, s,  c]])
+        centered = self.positions - self.centroid
+        rotated = centered @ R.T + self.centroid
+        return SwarmMatrix(rotated)
+
+    def rotate_y(self, angle_deg: float) -> 'SwarmMatrix':
+        """Tilt formation left/right (roll)."""
+        rad = np.radians(angle_deg)
+        c, s = np.cos(rad), np.sin(rad)
+        R = np.array([[c, 0, s],
+                       [0, 1, 0],
+                       [-s, 0, c]])
+        centered = self.positions - self.centroid
+        rotated = centered @ R.T + self.centroid
+        return SwarmMatrix(rotated)
+
+    def scale(self, factor: float) -> 'SwarmMatrix':
+        """Scale formation size. factor>1 expands, <1 contracts. Preserves centroid."""
+        center = self.centroid
+        scaled = (self.positions - center) * factor + center
+        return SwarmMatrix(scaled)
+
+    def scale_axes(self, north_factor: float = 1.0, east_factor: float = 1.0, alt_factor: float = 1.0) -> 'SwarmMatrix':
+        """Scale each axis independently. Useful for stretching shapes."""
+        center = self.centroid
+        factors = np.array([north_factor, east_factor, alt_factor])
+        scaled = (self.positions - center) * factors + center
+        return SwarmMatrix(scaled)
+
+    def translate(self, north_m: float = 0.0, east_m: float = 0.0, alt_m: float = 0.0) -> 'SwarmMatrix':
+        """Move entire formation by offset."""
+        offset = np.array([north_m, east_m, alt_m])
+        return SwarmMatrix(self.positions + offset)
+
+    def set_altitude(self, alt_m: float) -> 'SwarmMatrix':
+        """Set all drones to the same altitude."""
+        new = self.positions.copy()
+        new[:, 2] = alt_m
+        return SwarmMatrix(new)
+
+    def mirror_north(self) -> 'SwarmMatrix':
+        """Mirror formation across east-west axis."""
+        new = self.positions.copy()
+        center_n = new[:, 0].mean()
+        new[:, 0] = 2 * center_n - new[:, 0]
+        return SwarmMatrix(new)
+
+    def mirror_east(self) -> 'SwarmMatrix':
+        """Mirror formation across north-south axis."""
+        new = self.positions.copy()
+        center_e = new[:, 1].mean()
+        new[:, 1] = 2 * center_e - new[:, 1]
+        return SwarmMatrix(new)
+
+    # ── Interpolation ──
+
+    def interpolate_to(self, target: 'SwarmMatrix', t: float) -> 'SwarmMatrix':
+        """
+        Linear interpolation between this formation and target.
+        t=0 returns self, t=1 returns target. 0<t<1 returns blend.
+        Both must have same drone count.
+        """
+        assert self.count == target.count, f'Drone count mismatch: {self.count} vs {target.count}'
+        blended = (1 - t) * self.positions + t * target.positions
+        return SwarmMatrix(blended)
+
+    def transition_steps(self, target: 'SwarmMatrix', num_steps: int = 20) -> list:
+        """Generate a list of SwarmMatrix frames for smooth transition animation."""
+        return [self.interpolate_to(target, t) for t in np.linspace(0, 1, num_steps)]
+
+    # ── Analysis ──
+
+    def pairwise_distances(self) -> 'np.ndarray':
+        """Returns condensed pairwise distance matrix."""
+        try:
+            from scipy.spatial.distance import pdist
+            return pdist(self.positions)
+        except ImportError:
+            # Pure numpy fallback
+            n = len(self.positions)
+            dists = []
+            for i in range(n):
+                for j in range(i + 1, n):
+                    d = np.linalg.norm(self.positions[i] - self.positions[j])
+                    dists.append(d)
+            return np.array(dists)
+
+    def min_separation(self) -> float:
+        """Minimum distance between any two drones."""
+        dists = self.pairwise_distances()
+        return float(dists.min()) if len(dists) > 0 else float('inf')
+
+    def check_separation(self, min_dist_m: float = 5.0) -> tuple:
+        """Check if all drones maintain minimum separation. Returns (ok: bool, min_dist: float)."""
+        min_sep = self.min_separation()
+        return (min_sep >= min_dist_m, min_sep)
+
+    def bounding_box(self) -> dict:
+        """Get the bounding box of the formation in meters."""
+        mins = self.positions.min(axis=0)
+        maxs = self.positions.max(axis=0)
+        return {
+            'north_range': float(maxs[0] - mins[0]),
+            'east_range': float(maxs[1] - mins[1]),
+            'alt_range': float(maxs[2] - mins[2]),
+            'min': {'north': float(mins[0]), 'east': float(mins[1]), 'alt': float(mins[2])},
+            'max': {'north': float(maxs[0]), 'east': float(maxs[1]), 'alt': float(maxs[2])},
+        }
+
+    # ── Conversion (backward compat) ──
+
+    def to_slots(self) -> list:
+        """Convert back to list of FormationSlot for existing CommandRouter."""
+        return [
+            FormationSlot(north_m=float(row[0]), east_m=float(row[1]), alt_m=float(row[2]))
+            for row in self.positions
+        ]
+
+    def to_gps(self, center_lat: float, center_lon: float) -> list:
+        """Convert to GPS positions given a center reference point."""
+        return [
+            _ned_to_gps(center_lat, center_lon, float(row[0]), float(row[1]), float(row[2]))
+            for row in self.positions
+        ]
+
+    def __repr__(self):
+        return f'SwarmMatrix({self.count} drones, centroid={self.centroid.round(1)})'
+
+    def __len__(self):
+        return self.count
