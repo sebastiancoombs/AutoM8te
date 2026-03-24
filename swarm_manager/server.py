@@ -1,5 +1,5 @@
 """
-Swarm Manager FastAPI Server v0.8.0
+Swarm Manager FastAPI Server v0.9.0
 
 Exposes MCP tools to OpenClaw for drone control via pymavlink.
 All drone commands are synchronous (pymavlink is sync).
@@ -27,6 +27,7 @@ from .drone_registry import DroneRegistry
 from .command_router import CommandRouter
 from .formations import SwarmMatrix, GPSPosition, assign_drones_to_slots, _ned_to_gps, get_easing
 from .flight_paths import FlightPath, get_path_generator, PATH_GENERATORS
+from .tools import DroneTools
 
 # Configure logging
 logging.basicConfig(
@@ -42,6 +43,9 @@ router = CommandRouter(registry)
 # Thread pool for blocking pymavlink calls
 _executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="drone-cmd")
 
+# Consolidated LLM tools
+tools = DroneTools(registry, router, _executor)
+
 
 def _run_sync(fn, *args, **kwargs):
     """Run a synchronous function in the thread pool."""
@@ -51,7 +55,7 @@ def _run_sync(fn, *args, **kwargs):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
-    logger.info("AutoM8te Swarm Manager v0.8.0 starting up...")
+    logger.info("AutoM8te Swarm Manager v0.9.0 starting up...")
     yield
     logger.info("AutoM8te Swarm Manager shutting down...")
     registry.shutdown()
@@ -61,7 +65,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AutoM8te Swarm Manager",
     description="MCP server for voice-controlled drone swarm (pymavlink backend)",
-    version="0.8.0",
+    version="0.9.0",
     lifespan=lifespan,
 )
 
@@ -242,9 +246,13 @@ _path_tasks: dict[str, asyncio.Task] = {}
 async def root():
     return {
         "service": "AutoM8te Swarm Manager",
-        "version": "0.8.0",
+        "version": "0.9.0",
         "backend": "pymavlink",
         "registered_drones": registry.list_drones(),
+        "consolidated_tools": [
+            "/api/command", "/api/move", "/api/query", "/api/swarm",
+            "/api/formation", "/api/search", "/api/stop", "/api/status",
+        ],
     }
 
 
@@ -976,6 +984,142 @@ async def tracker():
 @app.get("/tracker3d")
 async def tracker3d():
     return FileResponse(str(STATIC_DIR / "tracker3d.html"))
+
+
+# ── Consolidated LLM Tools ──────────────────────────────────
+
+
+class CommandToolRequest(BaseModel):
+    drone_id: str = Field(..., description="Target drone ID")
+    action: str = Field(..., description="Command action (takeoff, land, hover, set_yaw, etc.)")
+    params: dict = Field(default_factory=dict, description="Action-specific parameters")
+
+
+class MoveToolRequest(BaseModel):
+    drone_id: str = Field(..., description="Target drone ID")
+    target: Optional[dict] = Field(None, description="Simple goto: {lat, lon, alt_m, heading_deg}")
+    path: Optional[str] = Field(None, description="Named path type (s_curve, zigzag, spiral, etc.)")
+    path_params: Optional[dict] = Field(None, description="Parameters for named path generator")
+    waypoints: Optional[list] = Field(None, description="Custom waypoints [[n,e,a], ...]")
+    easing: str = Field("ease_in_out", description="Easing function for path speed")
+    duration_s: float = Field(10.0, description="Total flight duration in seconds")
+    loop: bool = Field(False, description="Loop the path continuously")
+
+
+class QueryToolRequest(BaseModel):
+    drone_id: Optional[str] = Field(None, description="Drone ID, or null for all drones")
+
+
+class SwarmToolRequest(BaseModel):
+    action: str = Field(..., description="Single-drone command name to fan out")
+    params: Optional[dict] = Field(None, description="Command parameters (drone_id auto-filled)")
+    drone_ids: Optional[list[str]] = Field(None, description="Target drones (null=all)")
+    reference_drone: Optional[str] = Field(None, description="Resolve this drone's position as target")
+
+
+class FormationToolRequest(BaseModel):
+    name: Optional[str] = Field(None, description="Formation name (line, v, circle, grid, stack)")
+    coordinates: Optional[list[list[float]]] = Field(None, description="Custom coordinates [[n,e,a], ...]")
+    spacing_m: float = Field(10.0, description="Spacing between drones in meters")
+    alt_m: float = Field(10.0, description="Formation altitude in meters")
+    heading_deg: float = Field(0.0, description="Formation heading (for line/v)")
+    center_lat: Optional[float] = Field(None, description="Center latitude (default: drone centroid)")
+    center_lon: Optional[float] = Field(None, description="Center longitude (default: drone centroid)")
+    transforms: Optional[list[dict]] = Field(None, description="Transforms to apply in order")
+    transition_to: Optional[str] = Field(None, description="Target formation for animated transition")
+    transition_coords: Optional[list[list[float]]] = Field(None, description="Target coordinates for transition")
+    easing: str = Field("ease_in_out", description="Easing function for transitions")
+    duration_s: float = Field(5.0, description="Transition duration in seconds")
+    stagger: float = Field(0.0, description="Per-drone wave offset 0-0.5")
+
+
+class SearchToolRequest(BaseModel):
+    area: dict = Field(..., description="Search bounds: {min_lat, min_lon, max_lat, max_lon}")
+    drone_id: Optional[str] = Field(None, description="Drone ID, or null for swarm search")
+    pattern: str = Field("grid", description="Search pattern: grid, spiral, expanding")
+    alt_m: float = Field(20.0, description="Search altitude in meters")
+    swath_width_m: float = Field(30.0, description="Swath width in meters")
+
+
+class StopToolRequest(BaseModel):
+    drone_id: Optional[str] = Field(None, description="Drone ID, or null for all")
+    what: str = Field("all", description="What to stop: path, transition, all")
+
+
+@app.post("/api/command")
+async def api_command(req: CommandToolRequest):
+    """Execute a single-drone command (takeoff, land, hover, set_yaw, etc.)."""
+    result = await tools.command(req.drone_id, req.action, **req.params)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+
+@app.post("/api/move")
+async def api_move(req: MoveToolRequest):
+    """Move a drone: simple goto, named path, or custom waypoints."""
+    result = await tools.move(
+        req.drone_id, req.target, req.path, req.path_params,
+        req.waypoints, req.easing, req.duration_s, req.loop,
+    )
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+
+@app.post("/api/query")
+async def api_query(req: QueryToolRequest):
+    """Get drone telemetry (single drone or all)."""
+    result = await tools.query(req.drone_id)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result
+
+
+@app.post("/api/swarm")
+async def api_swarm(req: SwarmToolRequest):
+    """Fan any command to all or a subset of drones."""
+    result = await tools.swarm(req.action, req.params, req.drone_ids, req.reference_drone)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+
+@app.post("/api/formation")
+async def api_formation(req: FormationToolRequest):
+    """Set a formation: named, custom coordinates, or animated transition."""
+    result = await tools.formation(
+        req.name, req.coordinates, req.spacing_m, req.alt_m, req.heading_deg,
+        req.center_lat, req.center_lon, req.transforms, req.transition_to,
+        req.transition_coords, req.easing, req.duration_s, req.stagger,
+    )
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+
+@app.post("/api/search")
+async def api_search(req: SearchToolRequest):
+    """Search an area with a single drone or the whole swarm."""
+    result = await tools.search(req.area, req.drone_id, req.pattern, req.alt_m, req.swath_width_m)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+
+@app.post("/api/stop")
+async def api_stop(req: StopToolRequest):
+    """Stop drone activity (paths, transitions, or everything)."""
+    result = await tools.stop(req.drone_id, req.what)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+
+@app.get("/api/status")
+async def api_status():
+    """Get system status: drones, capabilities, running tasks."""
+    return await tools.status()
 
 
 # ── Main ────────────────────────────────────────────────────
