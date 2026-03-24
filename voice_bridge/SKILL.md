@@ -119,8 +119,10 @@ See the `examples/` directory:
 |----------|----------|-------------|
 | `DISCORD_BOT_TOKEN` | ✅ | Discord bot token |
 | `OPENAI_API_KEY` | ✅ | OpenAI API key (also used as LLM key for elevenlabs/openai) |
-| `ELEVENLABS_API_KEY` | elevenlabs provider | ElevenLabs API key |
-| `ANTHROPIC_API_KEY` | elevenlabs + anthropic LLM | Anthropic API key |
+| `ELEVENLABS_API_KEY` | elevenlabs provider / cascade tts=elevenlabs or stt=elevenlabs | ElevenLabs API key |
+| `ANTHROPIC_API_KEY` | elevenlabs + anthropic LLM / cascade llm=anthropic | Anthropic API key |
+| `DEEPGRAM_API_KEY` | cascade stt=deepgram | Deepgram API key for streaming STT |
+| `GROQ_API_KEY` | cascade llm=groq | Groq API key for fastest inference |
 | `DISCORD_GUILD_ID` | Optional | Guild to auto-join |
 | `DISCORD_VOICE_CHANNEL_ID` | Optional | Voice channel to auto-join |
 | `DISCORD_LISTEN_USER_ID` | Optional | Only listen to this user |

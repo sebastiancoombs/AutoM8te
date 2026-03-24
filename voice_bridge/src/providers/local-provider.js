@@ -26,21 +26,22 @@
  *        user_transcript, assistant_transcript, response_done, error, ready
  */
 
-import { EventEmitter } from 'events';
+import { BaseVoiceProvider } from './base-provider.js';
 
-export class LocalProvider extends EventEmitter {
-  constructor(opts = {}) {
-    super();
-    this.opts = opts;
+export class LocalProvider extends BaseVoiceProvider {
+  constructor(config, tools, executeTool) {
+    super(config, tools, executeTool);
     this._connected = false;
   }
 
+  get connected() {
+    return this._connected;
+  }
+
   connect() {
-    const err = new Error(
-      '[local] LocalProvider is not yet implemented. ' +
-      'This is a v2 placeholder. Use provider: "openai-realtime" or provider: "elevenlabs" for now.'
-    );
-    console.error(err.message);
+    console.log('[LOCAL] Local provider not yet implemented. Coming in v2.');
+    console.log('[LOCAL] Will support: Whisper.cpp STT → Ollama LLM → Kokoro TTS');
+    const err = new Error('Local provider coming in v2. Use "openai-realtime" or "elevenlabs" for now.');
     this.emit('error', err);
   }
 

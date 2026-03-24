@@ -1,13 +1,21 @@
 /**
  * OpenClaw Discord Realtime Voice Bridge
  *
- * Bridges Discord voice ↔ a configurable voice AI provider for sub-second
- * voice control of any HTTP-accessible service via function calling tools.
+ * Bridges Discord voice ↔ a configurable voice provider for sub-500ms (or 1–2s)
+ * voice control of any HTTP-accessible service via configurable function calling tools.
  *
- * Supported providers (set in config.json):
- *   "openai-realtime" — Speech-to-speech via OpenAI Realtime API (~500ms)
- *   "elevenlabs"      — ElevenLabs Scribe STT → LLM → ElevenLabs TTS (~1-2s)
- *   "local"           — v2 placeholder (Whisper.cpp + Ollama + Piper)
+ * Supported providers (set via config.json "provider" field):
+ *   "openai-realtime" — OpenAI Realtime API (default, ~300–500ms)
+ *   "elevenlabs"      — ElevenLabs STT + LLM + TTS (~1–2s, higher quality audio)
+ *   "local"           — Fully local pipeline (v2, not yet implemented)
+ *
+ * Architecture:
+ *   Discord Voice Channel (user speaks)
+ *     → Opus decode → PCM 24kHz mono
+ *     → Voice Provider (STT + reasoning + function calling + TTS)
+ *     → Function calls → HTTP to configured endpoints
+ *     → Audio response → PCM 24kHz mono
+ *     → Upsample → Opus encode → Discord voice channel
  *
  * Usage:
  *   node src/index.js [--config path/to/config.json] [--tools path/to/tools.json]
@@ -43,13 +51,18 @@ function loadConfig(path) {
     console.warn(`[CONFIG] No config file found at ${absPath}, using defaults.`);
     return {};
   }
-  const raw = readFileSync(absPath, 'utf8');
+  const raw    = readFileSync(absPath, 'utf8');
   const config = JSON.parse(raw);
   console.log(`[CONFIG] Loaded from ${absPath}`);
   return config;
 }
 
 const appConfig = loadConfig(configPath);
+
+// Default provider is "openai-realtime" for backward compatibility
+if (!appConfig.provider) {
+  appConfig.provider = 'openai-realtime';
+}
 
 // ── Load tools ──
 
@@ -67,7 +80,6 @@ if (existsSync(resolve(toolsPath))) {
 // ── Validate environment ──
 
 const DISCORD_TOKEN    = process.env.DISCORD_BOT_TOKEN;
-const OPENAI_KEY       = process.env.OPENAI_API_KEY;
 const GUILD_ID         = process.env.DISCORD_GUILD_ID;
 const VOICE_CHANNEL_ID = process.env.DISCORD_VOICE_CHANNEL_ID;
 const LISTEN_USER_ID   = process.env.DISCORD_LISTEN_USER_ID;
@@ -76,20 +88,8 @@ if (!DISCORD_TOKEN) {
   console.error('❌ DISCORD_BOT_TOKEN not set. See .env.example');
   process.exit(1);
 }
-if (!OPENAI_KEY) {
-  console.error('❌ OPENAI_API_KEY not set. See .env.example');
-  process.exit(1);
-}
 
-// ── Merge env overrides into config ──
-// CLI env vars take precedence over config.json values.
-
-const mergedConfig = {
-  provider:      'openai-realtime',  // default
-  ...appConfig,
-  model:  process.env.OPENAI_REALTIME_MODEL || appConfig.model || 'gpt-realtime',
-  voice:  process.env.OPENAI_VOICE          || appConfig.voice || 'coral',
-};
+// Provider-specific required env vars are checked inside each provider's connect()
 
 // ── Discord client ──
 
@@ -110,7 +110,7 @@ let isStreamingResponse = false;
 
 discord.once(Events.ClientReady, async (client) => {
   console.log(`[BOT] Logged in as ${client.user.tag}`);
-  console.log(`[BOT] Provider: ${mergedConfig.provider} | Voice: ${mergedConfig.voice} | Tools: ${realtimeTools.length}`);
+  console.log(`[BOT] Provider: ${appConfig.provider} | Tools: ${realtimeTools.length}`);
 
   if (VOICE_CHANNEL_ID && GUILD_ID) {
     const guild = client.guilds.cache.get(GUILD_ID);
@@ -160,13 +160,12 @@ discord.on(Events.MessageCreate, async (message) => {
   }
 
   if (message.content === '!status') {
-    const providerStatus = provider?._connected ? '✅' : '❌';
+    const providerStatus = provider?.connected ? '✅' : '❌';
     const voiceStatus    = discordVoice.connection ? '✅' : '❌';
     await message.reply(
-      `**OpenClaw Discord Realtime Voice Bridge**\n` +
+      `**OpenClaw Discord Voice Bridge**\n` +
       `Discord voice: ${voiceStatus}\n` +
-      `Provider: ${mergedConfig.provider} ${providerStatus}\n` +
-      `Voice: ${mergedConfig.voice}\n` +
+      `Provider: ${appConfig.provider} ${providerStatus}\n` +
       `Tools: ${realtimeTools.length} loaded\n` +
       `Config: ${configPath}\n` +
       `Tools config: ${toolsPath}`
@@ -177,21 +176,18 @@ discord.on(Events.MessageCreate, async (message) => {
 // ── Core: Voice Bridge ──
 
 async function startVoiceBridge(channel) {
-  console.log('[BRIDGE] Starting voice bridge...');
+  console.log(`[BRIDGE] Starting voice bridge (provider: ${appConfig.provider})...`);
 
   await discordVoice.join(channel);
 
-  provider = createProvider(OPENAI_KEY, mergedConfig, {
-    tools: realtimeTools,
-    executeTool: executeToolFn,
-  });
+  provider = createProvider(appConfig, realtimeTools, executeToolFn);
 
   // Discord → Provider
   discordVoice.on('audio', (pcmChunk) => {
     provider.sendAudio(pcmChunk);
   });
 
-  // Barge-in: stop current playback when user starts speaking
+  // Barge-in: stop playback when user starts speaking
   provider.on('speech_started', () => {
     if (isStreamingResponse) {
       discordVoice.endPlayback();
@@ -233,7 +229,7 @@ async function startVoiceBridge(channel) {
     } else {
       discordVoice.listenToAll();
     }
-    console.log(`[BRIDGE] ✅ Voice bridge active (provider: ${mergedConfig.provider}).`);
+    console.log('[BRIDGE] ✅ Voice bridge active.');
   });
 }
 
@@ -249,8 +245,8 @@ process.on('SIGINT', () => {
 
 // ── Start ──
 
-console.log('🎙️ OpenClaw Discord Realtime Voice Bridge starting...');
+console.log('🎙️ OpenClaw Discord Voice Bridge starting...');
+console.log(`   Provider: ${appConfig.provider}`);
 console.log(`   Config:   ${configPath}`);
 console.log(`   Tools:    ${toolsPath}`);
-console.log(`   Provider: ${mergedConfig.provider}`);
 discord.login(DISCORD_TOKEN);

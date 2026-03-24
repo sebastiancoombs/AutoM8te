@@ -13,89 +13,103 @@
  *     → ElevenLabs TTS  (POST /v1/text-to-speech/:voice_id/stream)
  *     → PCM audio out
  *
- * Required env vars:
- *   ELEVENLABS_API_KEY   — ElevenLabs API key
- *
- * Optional env vars (depending on llmProvider):
- *   OPENAI_API_KEY       — when llmProvider = "openai"
- *   ANTHROPIC_API_KEY    — when llmProvider = "anthropic"
- *
  * Config fields (in config.json):
- *   provider:        "elevenlabs"
- *   voice:           ElevenLabs voice ID (e.g. "JBFqnCBsd6RMkjVDRZzb")
- *   llmProvider:     "openai" | "anthropic"  (default: "openai")
- *   llmModel:        e.g. "gpt-4o", "claude-opus-4-5" (default: "gpt-4o")
- *   silenceMs:       ms of silence before processing speech (default: 800)
- *   silenceThreshold: RMS level below which audio is considered silence (default: 200)
+ *   provider:      "elevenlabs"
+ *   systemPrompt:  System instructions for the LLM
+ *   elevenlabs:
+ *     apiKey:      ElevenLabs API key or "env:ELEVENLABS_API_KEY"
+ *     voiceId:     ElevenLabs voice ID (default: "JBFqnCBsd6RMkjVDRZzb")
+ *     modelId:     ElevenLabs TTS model (default: "eleven_turbo_v2_5")
+ *   llm:
+ *     provider:    "openai" | "anthropic"  (default: "openai")
+ *     model:       LLM model name (e.g. "gpt-4o", "claude-sonnet-4-6")
+ *     apiKey:      API key or "env:OPENAI_API_KEY" / "env:ANTHROPIC_API_KEY"
+ *   silenceMs:     ms of silence before processing speech (default: 800)
+ *   silenceThreshold: RMS level below which audio is silence (default: 200)
  *
  * Emits: audio, audio_done, speech_started, speech_stopped,
  *        user_transcript, assistant_transcript, response_done, error, ready
  */
 
-import { EventEmitter } from 'events';
+import { BaseVoiceProvider } from './base-provider.js';
 
-const ELEVENLABS_BASE = 'https://api.elevenlabs.io';
-const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
-const ANTHROPIC_URL   = 'https://api.anthropic.com/v1/messages';
+const ELEVENLABS_BASE   = 'https://api.elevenlabs.io';
+const OPENAI_CHAT_URL   = 'https://api.openai.com/v1/chat/completions';
+const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
 // Default ElevenLabs voice: "Rachel" — calm, clear, English
 const DEFAULT_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb';
 
-export class ElevenLabsProvider extends EventEmitter {
+/**
+ * Resolve a value that may be an "env:VARIABLE_NAME" reference.
+ * @param {string} val
+ * @returns {string|undefined}
+ */
+function resolveValue(val) {
+  if (typeof val === 'string' && val.startsWith('env:')) {
+    return process.env[val.slice(4)];
+  }
+  return val;
+}
+
+export class ElevenLabsProvider extends BaseVoiceProvider {
   /**
-   * @param {object} opts
-   * @param {string} opts.systemPrompt     - System instructions for the LLM
-   * @param {string} opts.voice            - ElevenLabs voice ID
-   * @param {string} opts.llmProvider      - "openai" | "anthropic"
-   * @param {string} opts.llmModel         - LLM model name
-   * @param {number} opts.silenceMs        - Silence duration before processing
-   * @param {number} opts.silenceThreshold - RMS threshold for silence detection
-   * @param {Array}  opts.tools            - OpenAI-format tool definitions
-   * @param {Function} opts.executeTool    - Tool executor fn(name, args) → Promise<string>
+   * @param {object}   config      - Full config object from config.json
+   * @param {Array}    tools       - OpenAI-format tool definitions
+   * @param {Function} executeTool - Tool executor fn(name, args) → Promise<string>
    */
-  constructor(opts = {}) {
-    super();
+  constructor(config, tools, executeTool) {
+    super(config, tools, executeTool);
 
-    this.elevenLabsKey  = process.env.ELEVENLABS_API_KEY;
-    this.openaiKey      = process.env.OPENAI_API_KEY;
-    this.anthropicKey   = process.env.ANTHROPIC_API_KEY;
+    const elCfg  = config.elevenlabs || {};
+    const llmCfg = config.llm        || {};
 
-    this.systemPrompt    = opts.systemPrompt    || 'You are a voice assistant. Be concise.';
-    this.voiceId         = opts.voice           || DEFAULT_VOICE_ID;
-    this.llmProvider     = opts.llmProvider     || 'openai';
-    this.llmModel        = opts.llmModel        || (this.llmProvider === 'anthropic' ? 'claude-opus-4-5' : 'gpt-4o');
-    this.silenceMs       = opts.silenceMs       ?? 800;
-    this.silenceThreshold = opts.silenceThreshold ?? 200;
-    this.tools           = opts.tools           || [];
-    this.executeTool     = opts.executeTool     || null;
+    // Resolve API keys (support "env:VAR" pattern)
+    this.elevenLabsKey = resolveValue(elCfg.apiKey)  || process.env.ELEVENLABS_API_KEY;
+    this.llmProvider   = llmCfg.provider || 'openai';
+    this.llmModel      = llmCfg.model    || (this.llmProvider === 'anthropic' ? 'claude-opus-4-5' : 'gpt-4o');
+    this.llmKey        = resolveValue(llmCfg.apiKey) ||
+                         (this.llmProvider === 'anthropic'
+                           ? process.env.ANTHROPIC_API_KEY
+                           : process.env.OPENAI_API_KEY);
+
+    this.systemPrompt     = config.systemPrompt     || 'You are a voice assistant. Be concise.';
+    this.voiceId          = elCfg.voiceId           || DEFAULT_VOICE_ID;
+    this.ttsModelId       = elCfg.modelId           || 'eleven_turbo_v2_5';
+    this.silenceMs        = config.silenceMs        ?? 800;
+    this.silenceThreshold = config.silenceThreshold ?? 200;
 
     // Internal state
-    this._audioChunks    = [];     // PCM buffers accumulated during speech
+    this._audioChunks    = [];
     this._totalBytes     = 0;
     this._speaking       = false;
     this._silenceTimer   = null;
-    this._conversationHistory = []; // Multi-turn LLM context
-    this._connected      = true;   // Always "connected" (no persistent WS)
+    this._conversationHistory = [];
+    this._isConnected    = true; // No persistent WS — always "connected" once ready
+  }
+
+  get connected() {
+    return this._isConnected;
   }
 
   /** Called by index.js — no persistent connection needed for cascaded pipeline. */
   connect() {
     if (!this.elevenLabsKey) {
-      this.emit('error', new Error('ELEVENLABS_API_KEY not set'));
+      this.emit('error', new Error('ElevenLabs API key not set. Set ELEVENLABS_API_KEY or config.elevenlabs.apiKey'));
       return;
     }
-    if (this.llmProvider === 'openai' && !this.openaiKey) {
-      this.emit('error', new Error('OPENAI_API_KEY not set (required for llmProvider: openai)'));
+    if (this.llmProvider === 'openai' && !this.llmKey) {
+      this.emit('error', new Error('OpenAI API key not set. Set OPENAI_API_KEY or config.llm.apiKey'));
       return;
     }
-    if (this.llmProvider === 'anthropic' && !this.anthropicKey) {
-      this.emit('error', new Error('ANTHROPIC_API_KEY not set (required for llmProvider: anthropic)'));
+    if (this.llmProvider === 'anthropic' && !this.llmKey) {
+      this.emit('error', new Error('Anthropic API key not set. Set ANTHROPIC_API_KEY or config.llm.apiKey'));
       return;
     }
 
     console.log(`[elevenlabs] Ready — LLM: ${this.llmProvider}/${this.llmModel}, voice: ${this.voiceId}`);
-    console.log(`[elevenlabs] VAD: silence>${this.silenceMs}ms, threshold=${this.silenceThreshold}`);
+    console.log(`[elevenlabs] TTS model: ${this.ttsModelId}, VAD: silence>${this.silenceMs}ms, threshold=${this.silenceThreshold}`);
     this.emit('ready');
   }
 
@@ -104,18 +118,17 @@ export class ElevenLabsProvider extends EventEmitter {
    * Accumulates speech and triggers processing after silence.
    */
   sendAudio(pcmData) {
-    const rms = _rms(pcmData);
+    const rms      = _rms(pcmData);
     const isSpeech = rms > this.silenceThreshold;
 
     if (isSpeech) {
       if (!this._speaking) {
         this._speaking = true;
         this._audioChunks = [];
-        this._totalBytes = 0;
+        this._totalBytes  = 0;
         console.log('[elevenlabs] Speech detected');
         this.emit('speech_started');
       }
-      // Reset silence timer on each speech chunk
       if (this._silenceTimer) {
         clearTimeout(this._silenceTimer);
         this._silenceTimer = null;
@@ -123,7 +136,6 @@ export class ElevenLabsProvider extends EventEmitter {
       this._audioChunks.push(pcmData);
       this._totalBytes += pcmData.length;
     } else if (this._speaking) {
-      // Still collecting audio during silence gap
       this._audioChunks.push(pcmData);
       this._totalBytes += pcmData.length;
 
@@ -155,13 +167,13 @@ export class ElevenLabsProvider extends EventEmitter {
       // < 100ms of audio at 24kHz mono 16-bit — discard as noise
       console.log('[elevenlabs] Audio too short, discarding');
       this._audioChunks = [];
-      this._totalBytes = 0;
+      this._totalBytes  = 0;
       return;
     }
 
     const pcmBuffer = Buffer.concat(this._audioChunks);
     this._audioChunks = [];
-    this._totalBytes = 0;
+    this._totalBytes  = 0;
 
     try {
       // ── Step 1: STT via ElevenLabs Scribe ──
@@ -206,14 +218,7 @@ export class ElevenLabsProvider extends EventEmitter {
           }
         }
 
-        // Feed results back to LLM for a natural-language summary
-        const toolResultMessages = toolResults.map(({ call, result }) => ({
-          role: 'tool',
-          tool_call_id: call.id,
-          content: result,
-        }));
-
-        // Append assistant tool_use message and tool results
+        // Append assistant tool_use message and tool results to history
         this._conversationHistory.push({
           role: 'assistant',
           content: null,
@@ -223,7 +228,13 @@ export class ElevenLabsProvider extends EventEmitter {
             function: { name: c.name, arguments: JSON.stringify(c.args) },
           })),
         });
-        this._conversationHistory.push(...toolResultMessages);
+        this._conversationHistory.push(
+          ...toolResults.map(({ call, result }) => ({
+            role: 'tool',
+            tool_call_id: call.id,
+            content: result,
+          }))
+        );
 
         // Re-call LLM with tool results for spoken reply
         const { reply: followUp } = await this._callLLM(this._conversationHistory);
@@ -304,7 +315,7 @@ export class ElevenLabsProvider extends EventEmitter {
     const res = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.openaiKey}`,
+        'Authorization': `Bearer ${this.llmKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -315,12 +326,12 @@ export class ElevenLabsProvider extends EventEmitter {
       throw new Error(`OpenAI LLM ${res.status}: ${err}`);
     }
 
-    const data = await res.json();
-    const choice = data.choices?.[0];
+    const data    = await res.json();
+    const choice  = data.choices?.[0];
     const message = choice?.message;
 
     const toolCalls = message?.tool_calls?.map((tc) => ({
-      id: tc.id,
+      id:   tc.id,
       name: tc.function.name,
       args: JSON.parse(tc.function.arguments || '{}'),
     })) || [];
@@ -329,7 +340,7 @@ export class ElevenLabsProvider extends EventEmitter {
   }
 
   async _callAnthropic(messages) {
-    // Convert OpenAI message history to Anthropic format
+    // Convert message history to Anthropic format
     const anthropicMessages = messages
       .filter((m) => m.role !== 'system')
       .map((m) => {
@@ -343,9 +354,9 @@ export class ElevenLabsProvider extends EventEmitter {
           return {
             role: 'assistant',
             content: m.tool_calls.map((tc) => ({
-              type: 'tool_use',
-              id: tc.id,
-              name: tc.function.name,
+              type:  'tool_use',
+              id:    tc.id,
+              name:  tc.function.name,
               input: JSON.parse(tc.function.arguments || '{}'),
             })),
           };
@@ -354,16 +365,16 @@ export class ElevenLabsProvider extends EventEmitter {
       });
 
     const body = {
-      model: this.llmModel,
+      model:      this.llmModel,
       max_tokens: 1024,
-      system: this.systemPrompt,
-      messages: anthropicMessages,
+      system:     this.systemPrompt,
+      messages:   anthropicMessages,
     };
 
     if (this.tools.length > 0) {
       body.tools = this.tools.map((t) => ({
-        name: t.name,
-        description: t.description,
+        name:         t.name,
+        description:  t.description,
         input_schema: t.parameters,
       }));
     }
@@ -371,9 +382,9 @@ export class ElevenLabsProvider extends EventEmitter {
     const res = await fetch(ANTHROPIC_URL, {
       method: 'POST',
       headers: {
-        'x-api-key': this.anthropicKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-        'Content-Type': 'application/json',
+        'x-api-key':          this.llmKey,
+        'anthropic-version':  ANTHROPIC_VERSION,
+        'Content-Type':       'application/json',
       },
       body: JSON.stringify(body),
     });
@@ -383,14 +394,14 @@ export class ElevenLabsProvider extends EventEmitter {
       throw new Error(`Anthropic LLM ${res.status}: ${err}`);
     }
 
-    const data = await res.json();
+    const data    = await res.json();
     const content = data.content || [];
 
-    const textBlock = content.find((b) => b.type === 'text');
+    const textBlock  = content.find((b) => b.type === 'text');
     const toolBlocks = content.filter((b) => b.type === 'tool_use');
 
     const toolCalls = toolBlocks.map((b) => ({
-      id: b.id,
+      id:   b.id,
       name: b.name,
       args: b.input || {},
     }));
@@ -404,14 +415,14 @@ export class ElevenLabsProvider extends EventEmitter {
     const res = await fetch(`${ELEVENLABS_BASE}/v1/text-to-speech/${this.voiceId}/stream`, {
       method: 'POST',
       headers: {
-        'xi-api-key': this.elevenLabsKey,
+        'xi-api-key':   this.elevenLabsKey,
         'Content-Type': 'application/json',
-        'Accept': 'audio/pcm;rate=24000',
+        'Accept':       'audio/pcm;rate=24000',
       },
       body: JSON.stringify({
         text,
-        model_id: 'eleven_turbo_v2_5',
-        output_format: 'pcm_24000',
+        model_id:       this.ttsModelId,
+        output_format:  'pcm_24000',
         voice_settings: { stability: 0.5, similarity_boost: 0.75 },
       }),
     });
@@ -421,17 +432,12 @@ export class ElevenLabsProvider extends EventEmitter {
       throw new Error(`ElevenLabs TTS ${res.status}: ${err}`);
     }
 
-    // Stream the PCM chunks out as audio events
+    // Stream PCM chunks out as 'audio' events
     const reader = res.body.getReader();
-    let started = false;
-
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       if (value?.length) {
-        if (!started) {
-          started = true;
-        }
         this.emit('audio', Buffer.from(value));
       }
     }
@@ -444,9 +450,10 @@ export class ElevenLabsProvider extends EventEmitter {
       clearTimeout(this._silenceTimer);
       this._silenceTimer = null;
     }
-    this._speaking = false;
+    this._speaking    = false;
     this._audioChunks = [];
-    this._totalBytes = 0;
+    this._totalBytes  = 0;
+    this._isConnected = false;
     console.log('[elevenlabs] Disconnected');
   }
 }
@@ -472,15 +479,15 @@ function _rms(buffer) {
  * ElevenLabs Scribe requires a proper audio file format.
  */
 function _pcmToWav(pcmBuffer, sampleRate, channels, bitDepth) {
-  const byteRate = (sampleRate * channels * bitDepth) / 8;
+  const byteRate   = (sampleRate * channels * bitDepth) / 8;
   const blockAlign = (channels * bitDepth) / 8;
-  const header = Buffer.alloc(44);
+  const header     = Buffer.alloc(44);
 
   header.write('RIFF', 0);
   header.writeUInt32LE(36 + pcmBuffer.length, 4);
   header.write('WAVE', 8);
   header.write('fmt ', 12);
-  header.writeUInt32LE(16, 16);             // PCM chunk size
+  header.writeUInt32LE(16, 16);
   header.writeUInt16LE(1, 20);              // PCM format
   header.writeUInt16LE(channels, 22);
   header.writeUInt32LE(sampleRate, 24);

@@ -41,6 +41,32 @@ ElevenLabs TTS  (high-quality audio)
 Response audio → Discord voice
 ```
 
+### `cascade` — mix-and-match (~800ms–2s)
+```
+You speak in Discord voice
+    ↓
+PCM → Deepgram streaming WebSocket  (STT, real-time)
+         or ElevenLabs Scribe / Whisper (batch, on silence)
+    ↓
+Groq / OpenAI / Anthropic  (LLM + function calling)
+    ↓
+HTTP calls to YOUR endpoints (via tools.json)
+    ↓
+ElevenLabs / OpenAI TTS  (audio synthesis)
+    ↓
+Response audio → Discord voice
+```
+
+**Mix-and-match combinations:**
+
+| STT | LLM | TTS | Use case |
+|-----|-----|-----|----------|
+| Deepgram | Groq Llama | ElevenLabs Flash | ⚡ Speed demon (~800ms) |
+| Deepgram | Anthropic Claude | ElevenLabs Flash | 🧠 Smart + great voice (~1s) |
+| Deepgram | OpenAI GPT-4o | ElevenLabs | 🎯 Balanced |
+| Whisper | Anthropic Claude | OpenAI TTS | 💰 Cheapest OpenAI combo |
+| ElevenLabs Scribe | Groq | ElevenLabs | 🎙️ Best ElevenLabs quality |
+
 ### `local` — v2 placeholder
 Planned: Whisper.cpp + Ollama + Piper/Kokoro. Fully offline, no cloud APIs. Not yet implemented.
 
@@ -111,15 +137,52 @@ Controls the provider, AI personality, and audio settings:
 
 | Field | Provider | Description |
 |-------|----------|-------------|
-| `provider` | all | `"openai-realtime"` \| `"elevenlabs"` \| `"local"` |
+| `provider` | all | `"openai-realtime"` \| `"elevenlabs"` \| `"cascade"` \| `"local"` |
 | `systemPrompt` | all | Instructions for the AI |
 | `voice` | all | OpenAI voice name **or** ElevenLabs voice ID |
 | `model` | `openai-realtime` | OpenAI Realtime model |
 | `turnDetection` | `openai-realtime` | VAD mode (`semantic_vad` recommended) |
 | `llmProvider` | `elevenlabs` | LLM backend: `"openai"` or `"anthropic"` |
 | `llmModel` | `elevenlabs` | LLM model name (e.g. `"gpt-4o"`, `"claude-opus-4-5"`) |
-| `silenceMs` | `elevenlabs` | ms of silence before processing speech (default: 800) |
-| `silenceThreshold` | `elevenlabs` | RMS level below which audio is silence (default: 200) |
+| `silenceMs` | `elevenlabs` / `cascade` | ms of silence before processing speech (default: 800/1500) |
+| `silenceThreshold` | `elevenlabs` / `cascade` | RMS level below which audio is silence (default: 200) |
+| `stt` | `cascade` | STT config block — see Cascade Provider below |
+| `llm` | `cascade` | LLM config block — see Cascade Provider below |
+| `tts` | `cascade` | TTS config block — see Cascade Provider below |
+
+### Cascade Provider config
+
+The `cascade` provider accepts separate `stt`, `llm`, and `tts` config blocks:
+
+```json
+{
+  "provider": "cascade",
+  "systemPrompt": "You are a voice assistant. Be concise.",
+  "stt": {
+    "provider": "deepgram",
+    "model": "nova-2",
+    "apiKey": "env:DEEPGRAM_API_KEY",
+    "language": "en"
+  },
+  "llm": {
+    "provider": "groq",
+    "model": "llama-3.3-70b-versatile",
+    "apiKey": "env:GROQ_API_KEY"
+  },
+  "tts": {
+    "provider": "elevenlabs",
+    "voiceId": "pNInz6obpgDQGcFmaJgB",
+    "modelId": "eleven_flash_v2_5",
+    "apiKey": "env:ELEVENLABS_API_KEY"
+  }
+}
+```
+
+**Supported STT providers:** `deepgram` (streaming WebSocket), `elevenlabs` (Scribe batch), `whisper` (OpenAI batch)
+
+**Supported LLM providers:** `groq` (fastest inference), `openai` (Chat Completions), `anthropic` (Messages API with tool_use)
+
+**Supported TTS providers:** `elevenlabs` (streaming PCM), `openai` (TTS API)
 
 ### tools.json
 
@@ -172,6 +235,16 @@ Tools: `drone_takeoff`, `drone_land`, `drone_goto`, `drone_formation`, `drone_br
 
 > "V formation, 10 meters spacing" → `drone_formation(v, 10)` → "All drones moving to V formation."
 
+### AutoM8te — Drone Swarm (Cascade, Speed Demon)
+
+Same drone control but with Deepgram + Groq for maximum speed:
+
+```bash
+openclaw-discord-realtime \
+  --config examples/autom8te/config-cascade.json \
+  --tools examples/autom8te/tools.json
+```
+
 ### Home Assistant — Smart Home
 
 Control lights, thermostat, and doors (uses `elevenlabs` for higher-quality voice):
@@ -179,6 +252,14 @@ Control lights, thermostat, and doors (uses `elevenlabs` for higher-quality voic
 ```bash
 openclaw-discord-realtime \
   --config examples/home-assistant/config.json \
+  --tools examples/home-assistant/tools.json
+```
+
+Or with the cascade provider (Deepgram + Claude + ElevenLabs):
+
+```bash
+openclaw-discord-realtime \
+  --config examples/home-assistant/config-cascade.json \
   --tools examples/home-assistant/tools.json
 ```
 
@@ -220,8 +301,14 @@ OPENAI_API_KEY=your_openai_api_key       # also used as LLM key for elevenlabs/o
 # Required for elevenlabs provider
 ELEVENLABS_API_KEY=your_elevenlabs_key
 
-# Required for elevenlabs + anthropic LLM
+# Required for elevenlabs + anthropic LLM, or cascade + anthropic
 ANTHROPIC_API_KEY=your_anthropic_key
+
+# Required for cascade + deepgram STT
+DEEPGRAM_API_KEY=your_deepgram_key
+
+# Required for cascade + groq LLM
+GROQ_API_KEY=your_groq_key
 
 # Optional: auto-join on startup
 DISCORD_GUILD_ID=your_guild_id
