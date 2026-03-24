@@ -1,5 +1,5 @@
 """
-Swarm Manager FastAPI Server v0.2.0
+Swarm Manager FastAPI Server v0.4.0
 
 Exposes MCP tools to OpenClaw for drone control via pymavlink.
 All drone commands are synchronous (pymavlink is sync).
@@ -48,7 +48,7 @@ def _run_sync(fn, *args, **kwargs):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
-    logger.info("AutoM8te Swarm Manager v0.3.0 starting up...")
+    logger.info("AutoM8te Swarm Manager v0.4.0 starting up...")
     yield
     logger.info("AutoM8te Swarm Manager shutting down...")
     registry.shutdown()
@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AutoM8te Swarm Manager",
     description="MCP server for voice-controlled drone swarm (pymavlink backend)",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -104,8 +104,33 @@ class FormationRequest(BaseModel):
     heading_deg: float = Field(0.0, description="Formation heading (for line/v)")
 
 
+class SetYawRequest(BaseModel):
+    drone_id: str = Field(..., description="Target drone ID")
+    heading_deg: float = Field(..., description="Target heading in degrees (0=N, 90=E)")
+    relative: bool = Field(False, description="If true, heading is relative to current")
+    speed_degs: float = Field(30.0, description="Rotation speed in degrees/second", ge=1.0, le=180.0)
+
+
+class ChangeSpeedRequest(BaseModel):
+    drone_id: str = Field(..., description="Target drone ID")
+    speed_ms: float = Field(..., description="Speed in meters/second", ge=0.0, le=100.0)
+    speed_type: str = Field("ground", description="Speed type: 'ground' or 'air'")
+
+
+class ChangeAltitudeRequest(BaseModel):
+    drone_id: str = Field(..., description="Target drone ID")
+    alt_m: float = Field(..., description="New altitude in meters (relative)", ge=1.0, le=120.0)
+
+
+class SetHomeRequest(BaseModel):
+    drone_id: str = Field(..., description="Target drone ID")
+    lat: Optional[float] = Field(None, description="Home latitude (omit to use current location)")
+    lon: Optional[float] = Field(None, description="Home longitude (omit to use current location)")
+    alt: Optional[float] = Field(None, description="Home altitude (omit to use current location)")
+
+
 class BroadcastRequest(BaseModel):
-    command: str = Field(..., description="Command to broadcast (takeoff, land, return_home, emergency_stop)")
+    command: str = Field(..., description="Command to broadcast (takeoff, land, return_home, emergency_stop, hover, pause)")
     altitude_m: Optional[float] = Field(5.0, description="Altitude for takeoff")
 
 
@@ -155,7 +180,7 @@ class SearchSwarmRequest(BaseModel):
 async def root():
     return {
         "service": "AutoM8te Swarm Manager",
-        "version": "0.2.0",
+        "version": "0.4.0",
         "backend": "pymavlink",
         "registered_drones": registry.list_drones(),
     }
@@ -221,6 +246,69 @@ async def drone_return_home(req: DroneIdRequest):
 async def drone_emergency_stop(req: DroneIdRequest):
     """Emergency stop — force disarm. SITL ONLY."""
     result = await _run_sync(router.emergency_stop, req.drone_id)
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    return result
+
+
+@app.post("/tools/drone_hover")
+async def drone_hover(req: DroneIdRequest):
+    """Stop and hold current position."""
+    result = await _run_sync(router.hover, req.drone_id)
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    return result
+
+
+@app.post("/tools/drone_set_yaw")
+async def drone_set_yaw(req: SetYawRequest):
+    """Set drone heading without moving."""
+    result = await _run_sync(router.set_yaw, req.drone_id, req.heading_deg, req.relative, req.speed_degs)
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    return result
+
+
+@app.post("/tools/drone_change_speed")
+async def drone_change_speed(req: ChangeSpeedRequest):
+    """Change speed mid-flight."""
+    result = await _run_sync(router.change_speed, req.drone_id, req.speed_ms, req.speed_type)
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    return result
+
+
+@app.post("/tools/drone_change_altitude")
+async def drone_change_altitude(req: ChangeAltitudeRequest):
+    """Change altitude only, keep current lat/lon."""
+    result = await _run_sync(router.change_altitude, req.drone_id, req.alt_m)
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    return result
+
+
+@app.post("/tools/drone_set_home")
+async def drone_set_home(req: SetHomeRequest):
+    """Set home position (current location or specified GPS)."""
+    result = await _run_sync(router.set_home, req.drone_id, req.lat, req.lon, req.alt)
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    return result
+
+
+@app.post("/tools/drone_pause")
+async def drone_pause(req: DroneIdRequest):
+    """Pause current task (switch to LOITER)."""
+    result = await _run_sync(router.pause, req.drone_id)
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["message"])
+    return result
+
+
+@app.post("/tools/drone_resume")
+async def drone_resume(req: DroneIdRequest):
+    """Resume from pause (restore previous task)."""
+    result = await _run_sync(router.resume, req.drone_id)
     if result["status"] == "error":
         raise HTTPException(status_code=500, detail=result["message"])
     return result

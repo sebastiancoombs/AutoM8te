@@ -30,7 +30,8 @@ class CommandRouter:
     """
     Routes high-level commands to drones via pymavlink.
 
-    Provides: takeoff, land, goto, set_velocity, return_home, broadcast.
+    Provides: takeoff, land, goto, set_velocity, return_home, hover,
+    set_yaw, change_speed, change_altitude, set_home, pause, resume, broadcast.
     """
 
     def __init__(self, registry: DroneRegistry):
@@ -706,6 +707,280 @@ class CommandRouter:
 
         return None
 
+    def hover(self, drone_id: str) -> dict:
+        """Stop and hold current position. Switch to LOITER (copter holds GPS position)."""
+        logger.info(f"{drone_id}: Hover (hold position)")
+
+        try:
+            state = self._get_state(drone_id)
+
+            # LOITER holds GPS position on copters; fall back to GUIDED + zero velocity
+            if not self._set_mode(state, "LOITER"):
+                logger.warning(f"{drone_id}: LOITER unavailable, trying GUIDED hold")
+                if not self._set_mode(state, "GUIDED"):
+                    return {"status": "error", "message": "Failed to set hold mode", "drone_id": drone_id}
+
+                master = state.master
+                # type_mask: use position (current), ignore velocity/accel/yaw
+                type_mask = 0b0000_1111_1111_000
+                master.mav.set_position_target_local_ned_send(
+                    0,  # time_boot_ms
+                    master.target_system,
+                    master.target_component,
+                    mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+                    type_mask,
+                    0, 0, 0,  # position (0,0,0 = current in local frame)
+                    0, 0, 0,  # velocity (ignored)
+                    0, 0, 0,  # acceleration (ignored)
+                    0, 0,     # yaw, yaw_rate (ignored)
+                )
+
+            state.current_task = "hovering"
+
+            return {
+                "status": "success",
+                "message": f"{drone_id} holding position",
+                "drone_id": drone_id,
+            }
+
+        except Exception as e:
+            logger.error(f"{drone_id}: Hover failed: {e}")
+            return {"status": "error", "message": f"Hover failed: {e}", "drone_id": drone_id}
+
+    def set_yaw(self, drone_id: str, heading_deg: float, relative: bool = False, speed_degs: float = 30.0) -> dict:
+        """
+        Set drone heading without moving.
+
+        Args:
+            heading_deg: Target heading in degrees (0=N, 90=E)
+            relative: If True, heading_deg is relative to current heading
+            speed_degs: Rotation speed in degrees/second
+        """
+        logger.info(f"{drone_id}: Set yaw {heading_deg}° ({'relative' if relative else 'absolute'}) at {speed_degs}°/s")
+
+        try:
+            state = self._get_state(drone_id)
+            master = state.master
+
+            # Ensure GUIDED mode
+            if not self._set_mode(state, "GUIDED"):
+                return {"status": "error", "message": "Failed to set GUIDED mode", "drone_id": drone_id}
+
+            # Determine CW vs CCW direction
+            direction = 1  # 1 = CW, -1 = CCW
+            if not relative and heading_deg < 0:
+                direction = -1
+                heading_deg = abs(heading_deg)
+
+            master.mav.command_long_send(
+                master.target_system,
+                master.target_component,
+                mavutil.mavlink.MAV_CMD_CONDITION_YAW,
+                0,  # confirmation
+                heading_deg,    # param1: target angle
+                speed_degs,     # param2: angular speed deg/s
+                direction,      # param3: direction (1=CW, -1=CCW)
+                1 if relative else 0,  # param4: 0=absolute, 1=relative
+                0, 0, 0,
+            )
+
+            return {
+                "status": "success",
+                "message": f"{drone_id} yaw set to {heading_deg}° ({'relative' if relative else 'absolute'})",
+                "drone_id": drone_id,
+                "heading_deg": heading_deg,
+                "relative": relative,
+            }
+
+        except Exception as e:
+            logger.error(f"{drone_id}: Set yaw failed: {e}")
+            return {"status": "error", "message": f"Set yaw failed: {e}", "drone_id": drone_id}
+
+    def change_speed(self, drone_id: str, speed_ms: float, speed_type: str = "ground") -> dict:
+        """
+        Change speed mid-flight.
+
+        Args:
+            speed_ms: Speed in meters/second
+            speed_type: 'ground' or 'air'
+        """
+        logger.info(f"{drone_id}: Change {speed_type}speed to {speed_ms} m/s")
+
+        try:
+            state = self._get_state(drone_id)
+            master = state.master
+
+            type_value = 1 if speed_type == "ground" else 0  # 0=airspeed, 1=groundspeed
+
+            master.mav.command_long_send(
+                master.target_system,
+                master.target_component,
+                mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED,
+                0,  # confirmation
+                type_value,   # param1: speed type
+                speed_ms,     # param2: speed in m/s
+                -1,           # param3: throttle (-1 = no change)
+                0, 0, 0, 0,
+            )
+
+            return {
+                "status": "success",
+                "message": f"{drone_id} {speed_type}speed set to {speed_ms} m/s",
+                "drone_id": drone_id,
+                "speed_ms": speed_ms,
+                "speed_type": speed_type,
+            }
+
+        except Exception as e:
+            logger.error(f"{drone_id}: Change speed failed: {e}")
+            return {"status": "error", "message": f"Change speed failed: {e}", "drone_id": drone_id}
+
+    def change_altitude(self, drone_id: str, alt_m: float) -> dict:
+        """
+        Change altitude only, keeping current lat/lon.
+
+        Args:
+            alt_m: New altitude in meters (relative)
+        """
+        logger.info(f"{drone_id}: Change altitude to {alt_m}m")
+
+        try:
+            state = self._get_state(drone_id)
+
+            # Get current lat/lon from state and re-use goto
+            lat = state.lat
+            lon = state.lon
+            if lat == 0.0 and lon == 0.0:
+                return {"status": "error", "message": "No GPS position available", "drone_id": drone_id}
+
+            result = self.goto(drone_id, lat, lon, alt_m)
+
+            if result["status"] == "success":
+                result["message"] = f"{drone_id} changing altitude to {alt_m}m"
+
+            return result
+
+        except Exception as e:
+            logger.error(f"{drone_id}: Change altitude failed: {e}")
+            return {"status": "error", "message": f"Change altitude failed: {e}", "drone_id": drone_id}
+
+    def set_home(self, drone_id: str, lat: Optional[float] = None, lon: Optional[float] = None,
+                 alt: Optional[float] = None) -> dict:
+        """
+        Set home position.
+
+        If no coordinates given, uses current location. Otherwise uses provided GPS.
+        """
+        use_current = lat is None or lon is None
+        logger.info(f"{drone_id}: Set home {'(current location)' if use_current else f'({lat}, {lon}, {alt})'}")
+
+        try:
+            state = self._get_state(drone_id)
+            master = state.master
+
+            if use_current:
+                master.mav.command_long_send(
+                    master.target_system,
+                    master.target_component,
+                    mavutil.mavlink.MAV_CMD_DO_SET_HOME,
+                    0,  # confirmation
+                    1,  # param1: 1 = use current location
+                    0, 0, 0, 0, 0, 0,
+                )
+                msg = f"{drone_id} home set to current location"
+            else:
+                master.mav.command_long_send(
+                    master.target_system,
+                    master.target_component,
+                    mavutil.mavlink.MAV_CMD_DO_SET_HOME,
+                    0,  # confirmation
+                    0,        # param1: 0 = use specified location
+                    0, 0, 0,  # params 2-4 unused
+                    lat,      # param5: latitude
+                    lon,      # param6: longitude
+                    alt or 0, # param7: altitude
+                )
+                msg = f"{drone_id} home set to ({lat}, {lon}, {alt})"
+
+            return {
+                "status": "success",
+                "message": msg,
+                "drone_id": drone_id,
+            }
+
+        except Exception as e:
+            logger.error(f"{drone_id}: Set home failed: {e}")
+            return {"status": "error", "message": f"Set home failed: {e}", "drone_id": drone_id}
+
+    def pause(self, drone_id: str) -> dict:
+        """Pause current task. Switch to LOITER (copter hovers in place)."""
+        logger.info(f"{drone_id}: Pause")
+
+        try:
+            state = self._get_state(drone_id)
+
+            # Store current task so resume can restore it
+            state._paused_task = state.current_task
+
+            if not self._set_mode(state, "LOITER"):
+                return {"status": "error", "message": "Failed to set LOITER mode", "drone_id": drone_id}
+
+            state.current_task = "paused"
+
+            return {
+                "status": "success",
+                "message": f"{drone_id} paused (was: {state._paused_task})",
+                "drone_id": drone_id,
+                "paused_task": state._paused_task,
+            }
+
+        except Exception as e:
+            logger.error(f"{drone_id}: Pause failed: {e}")
+            return {"status": "error", "message": f"Pause failed: {e}", "drone_id": drone_id}
+
+    def resume(self, drone_id: str) -> dict:
+        """Resume from pause. Switch back to GUIDED and restore previous task."""
+        logger.info(f"{drone_id}: Resume")
+
+        try:
+            state = self._get_state(drone_id)
+
+            paused_task = getattr(state, '_paused_task', None)
+            if state.current_task != "paused" or paused_task is None:
+                return {"status": "error", "message": f"{drone_id} is not paused", "drone_id": drone_id}
+
+            if not self._set_mode(state, "GUIDED"):
+                return {"status": "error", "message": "Failed to set GUIDED mode", "drone_id": drone_id}
+
+            state.current_task = paused_task
+            state._paused_task = None
+
+            # If was orbiting or searching, re-send the current waypoint
+            if paused_task == "orbiting":
+                wps = getattr(state, '_orbit_waypoints', None)
+                idx = getattr(state, '_orbit_index', 0)
+                if wps and idx < len(wps):
+                    wp = wps[idx]
+                    self.goto(drone_id, wp.lat, wp.lon, wp.alt_m)
+
+            elif paused_task == "searching":
+                wps = getattr(state, '_search_waypoints', None)
+                idx = getattr(state, '_search_index', 0)
+                if wps and idx < len(wps):
+                    wp = wps[idx]
+                    self.goto(drone_id, wp.lat, wp.lon, wp.alt_m)
+
+            return {
+                "status": "success",
+                "message": f"{drone_id} resumed (task: {paused_task})",
+                "drone_id": drone_id,
+                "resumed_task": paused_task,
+            }
+
+        except Exception as e:
+            logger.error(f"{drone_id}: Resume failed: {e}")
+            return {"status": "error", "message": f"Resume failed: {e}", "drone_id": drone_id}
+
     def broadcast(self, command: str, **kwargs) -> dict:
         """Send command to all registered drones."""
         logger.info(f"Broadcast: {command}")
@@ -723,6 +998,10 @@ class CommandRouter:
                     result = self.return_home(drone_id)
                 elif command == "emergency_stop":
                     result = self.emergency_stop(drone_id)
+                elif command == "hover":
+                    result = self.hover(drone_id)
+                elif command == "pause":
+                    result = self.pause(drone_id)
                 else:
                     result = {"status": "error", "message": f"Unknown command: {command}", "drone_id": drone_id}
                 results.append(result)
