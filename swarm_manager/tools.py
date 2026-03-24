@@ -312,9 +312,11 @@ class DroneTools:
                     gps_positions = frame.to_gps(center_lat, center_lon)
                     slots = frame.to_slots()
                     assignments = assign_drones_to_slots(current_positions, slots, center_lat, center_lon)
-                    for drone_idx, slot_idx in assignments:
-                        gps = gps_positions[slot_idx]
-                        await self._run_sync(self.router.goto, drone_ids[drone_idx], gps.lat, gps.lon, gps.alt_m)
+                    # Parallel dispatch — all drones move simultaneously
+                    await asyncio.gather(*[
+                        self._run_sync(self.router.goto, drone_ids[di], gps_positions[si].lat, gps_positions[si].lon, gps_positions[si].alt_m)
+                        for di, si in assignments
+                    ])
                     await asyncio.sleep(interval)
 
             self._transition_task = asyncio.create_task(run_transition())
@@ -365,13 +367,13 @@ class DroneTools:
         gps_positions = matrix.to_gps(center_lat, center_lon)
         assignments = assign_drones_to_slots(current_positions, slots, center_lat, center_lon)
 
-        results = []
-        for drone_idx, slot_idx in assignments:
-            gps = gps_positions[slot_idx]
-            result = await self._run_sync(
-                self.router.goto, drone_ids[drone_idx], gps.lat, gps.lon, gps.alt_m, heading_deg
+        # Parallel dispatch — all drones move simultaneously
+        results = await asyncio.gather(*[
+            self._run_sync(
+                self.router.goto, drone_ids[di], gps_positions[si].lat, gps_positions[si].lon, gps_positions[si].alt_m, heading_deg
             )
-            results.append(result)
+            for di, si in assignments
+        ])
 
         response = {
             'status': 'success',
@@ -442,12 +444,16 @@ class DroneTools:
 
         if what in ('all',):
             if drone_id:
-                r = await self._run_sync(self.router.hover, drone_id)
+                await self._run_sync(self.router.hover, drone_id)
                 results.append(f'{drone_id} hovering')
             else:
-                for did in self.registry.list_drones():
-                    await self._run_sync(self.router.hover, did)
-                results.append(f'All drones hovering')
+                # Parallel hover — all drones stop simultaneously
+                all_drones = self.registry.list_drones()
+                await asyncio.gather(*[
+                    self._run_sync(self.router.hover, did)
+                    for did in all_drones
+                ])
+                results.append(f'All {len(all_drones)} drones hovering')
 
         return {
             'status': 'success',
