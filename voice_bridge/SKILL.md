@@ -32,7 +32,7 @@ cp .env.example .env
 openclaw-discord-realtime
 
 # Run with custom tools
-openclaw-discord-realtime --config examples/autom8te/config.json --tools examples/autom8te/tools.json
+openclaw-discord-realtime --config examples/generic/config.json --tools examples/generic/tools.json
 ```
 
 ## Providers
@@ -43,6 +43,7 @@ Set `"provider"` in config.json to choose the AI backend:
 |----------|---------|-------------|
 | `openai-realtime` | ~500ms | Speech-to-speech via OpenAI Realtime API (default) |
 | `elevenlabs` | ~1–2s | ElevenLabs Scribe STT → OpenAI/Anthropic LLM → ElevenLabs TTS |
+| `cascade` | ~800ms–2s | Mix-and-match STT + LLM + TTS providers |
 | `local` | TBD | v2 placeholder — Whisper.cpp + Ollama + Piper (not yet implemented) |
 
 ## Configuration
@@ -54,7 +55,7 @@ Two files control behaviour:
 ```json
 {
   "provider": "openai-realtime",
-  "systemPrompt": "You are a voice assistant. Be concise.",
+  "systemPrompt": "You are a helpful voice assistant. Execute commands immediately when asked. Be concise — respond in 1-2 sentences.",
   "voice": "coral",
   "model": "gpt-realtime",
   "turnDetection": "semantic_vad"
@@ -67,7 +68,7 @@ For `elevenlabs`:
   "provider": "elevenlabs",
   "llmProvider": "openai",
   "llmModel": "gpt-4o",
-  "systemPrompt": "You are a voice assistant. Be concise.",
+  "systemPrompt": "You are a helpful voice assistant. Be concise.",
   "voice": "JBFqnCBsd6RMkjVDRZzb",
   "silenceMs": 800
 }
@@ -81,7 +82,7 @@ For `elevenlabs`:
     {
       "name": "my_tool",
       "description": "What this tool does",
-      "endpoint": { "method": "POST", "url": "http://localhost:8000/my_tool" },
+      "endpoint": { "method": "POST", "url": "https://your-service.example.com/my_tool" },
       "parameters": {
         "type": "object",
         "properties": {
@@ -101,7 +102,7 @@ Each tool maps to an HTTP endpoint. The AI calls it, you get the result spoken b
 
 See the `examples/` directory:
 
-- `examples/autom8te/` — Drone swarm control via AutoM8te
+- `examples/generic/` — Simple webhook tools showing the format
 - `examples/home-assistant/` — Smart home (lights, thermostat, locks)
 
 ## Discord Commands

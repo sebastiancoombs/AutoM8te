@@ -128,7 +128,7 @@ Controls the provider, AI personality, and audio settings:
 ```json
 {
   "provider": "openai-realtime",
-  "systemPrompt": "You are a voice assistant. Execute commands immediately. Be concise.",
+  "systemPrompt": "You are a helpful voice assistant. Execute commands immediately when asked. Be concise — respond in 1-2 sentences.",
   "voice": "coral",
   "model": "gpt-realtime",
   "turnDetection": "semantic_vad"
@@ -157,7 +157,7 @@ The `cascade` provider accepts separate `stt`, `llm`, and `tts` config blocks:
 ```json
 {
   "provider": "cascade",
-  "systemPrompt": "You are a voice assistant. Be concise.",
+  "systemPrompt": "You are a helpful voice assistant. Be concise.",
   "stt": {
     "provider": "deepgram",
     "model": "nova-2",
@@ -196,7 +196,7 @@ Defines the functions the AI can call:
       "description": "What this action does — the AI reads this to decide when to call it",
       "endpoint": {
         "method": "POST",
-        "url": "http://localhost:8000/my_action"
+        "url": "https://your-service.example.com/my_action"
       },
       "parameters": {
         "type": "object",
@@ -211,39 +211,25 @@ Defines the functions the AI can call:
 }
 ```
 
-Each tool maps to any HTTP endpoint — your own service, Home Assistant, a local FastAPI server, anything.
+Each tool maps to any HTTP endpoint — your own service, Home Assistant, a local API server, anything.
 
 ---
 
 ## Examples
 
-### AutoM8te — Drone Swarm Control
+### Generic — Webhooks
 
-Control an ArduPilot drone swarm via voice (uses `openai-realtime` for minimum latency):
-
-```bash
-openclaw-discord-realtime \
-  --config examples/autom8te/config.json \
-  --tools examples/autom8te/tools.json
-```
-
-System prompt: Military copilot persona, crisp and direct.
-
-Tools: `drone_takeoff`, `drone_land`, `drone_goto`, `drone_formation`, `drone_broadcast`, `drone_orbit`, `drone_search`, `drone_velocity`, `drone_return_home`, `drone_query`, `list_drones`
-
-> "Take drone 1 to 50 meters" → `drone_takeoff(drone_1, 50)` → "Drone 1 climbing to 50 meters."
-
-> "V formation, 10 meters spacing" → `drone_formation(v, 10)` → "All drones moving to V formation."
-
-### AutoM8te — Drone Swarm (Cascade, Speed Demon)
-
-Same drone control but with Deepgram + Groq for maximum speed:
+A simple starting point showing how to wire up three HTTP tools:
 
 ```bash
 openclaw-discord-realtime \
-  --config examples/autom8te/config-cascade.json \
-  --tools examples/autom8te/tools.json
+  --config examples/generic/config.json \
+  --tools examples/generic/tools.json
 ```
+
+> "What time is it?" → `get_time()` → "It's 14:32 UTC."
+
+> "Turn on the lights" → `run_action(action=turn_on, target=lights)` → "Lights are on."
 
 ### Home Assistant — Smart Home
 

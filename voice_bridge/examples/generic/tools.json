@@ -23,13 +23,14 @@
     },
     {
       "name": "run_action",
-      "description": "Run a custom action on your backend service.",
+      "description": "Run a custom action on your backend service. Examples: turn on the lights, set temperature to 72, lock the front door.",
       "endpoint": { "method": "POST", "url": "https://your-service.example.com/action" },
       "parameters": {
         "type": "object",
         "properties": {
-          "action": { "type": "string", "description": "The action to perform" },
-          "target": { "type": "string", "description": "The target to act on" }
+          "action": { "type": "string", "description": "The action to perform (e.g. turn_on, set_temperature, lock)" },
+          "target": { "type": "string", "description": "The target to act on (e.g. lights, thermostat, front_door)" },
+          "value": { "type": "string", "description": "Optional value for the action (e.g. 72 for temperature)" }
         },
         "required": ["action"]
       }
