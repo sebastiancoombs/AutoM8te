@@ -1,19 +1,13 @@
 /**
  * OpenClaw Discord Realtime Voice Bridge
  *
- * Bridges Discord voice ↔ OpenAI Realtime API for sub-500ms voice control
- * of any HTTP-accessible service via configurable function calling tools.
+ * Bridges Discord voice ↔ a configurable voice AI provider for sub-second
+ * voice control of any HTTP-accessible service via function calling tools.
  *
- * Architecture:
- *   Discord Voice Channel (user speaks)
- *     → Opus decode → PCM 24kHz mono
- *     → OpenAI Realtime API WebSocket
- *     → Model: STT + reasoning + function calling + TTS in ONE pass
- *     → Function calls → HTTP to configured endpoints
- *     → Audio response → PCM 24kHz mono
- *     → Upsample → Opus encode → Discord voice channel
- *
- * Target latency: ~300-500ms from user speech end to AI response start.
+ * Supported providers (set in config.json):
+ *   "openai-realtime" — Speech-to-speech via OpenAI Realtime API (~500ms)
+ *   "elevenlabs"      — ElevenLabs Scribe STT → LLM → ElevenLabs TTS (~1-2s)
+ *   "local"           — v2 placeholder (Whisper.cpp + Ollama + Piper)
  *
  * Usage:
  *   node src/index.js [--config path/to/config.json] [--tools path/to/tools.json]
@@ -25,7 +19,7 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { Client, GatewayIntentBits, Events } from 'discord.js';
 import { DiscordVoice } from './discord-voice.js';
-import { RealtimeClient } from './realtime-client.js';
+import { createProvider } from './provider.js';
 import { loadTools } from './tools.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -72,11 +66,11 @@ if (existsSync(resolve(toolsPath))) {
 
 // ── Validate environment ──
 
-const DISCORD_TOKEN      = process.env.DISCORD_BOT_TOKEN;
-const OPENAI_KEY         = process.env.OPENAI_API_KEY;
-const GUILD_ID           = process.env.DISCORD_GUILD_ID;
-const VOICE_CHANNEL_ID   = process.env.DISCORD_VOICE_CHANNEL_ID;
-const LISTEN_USER_ID     = process.env.DISCORD_LISTEN_USER_ID;
+const DISCORD_TOKEN    = process.env.DISCORD_BOT_TOKEN;
+const OPENAI_KEY       = process.env.OPENAI_API_KEY;
+const GUILD_ID         = process.env.DISCORD_GUILD_ID;
+const VOICE_CHANNEL_ID = process.env.DISCORD_VOICE_CHANNEL_ID;
+const LISTEN_USER_ID   = process.env.DISCORD_LISTEN_USER_ID;
 
 if (!DISCORD_TOKEN) {
   console.error('❌ DISCORD_BOT_TOKEN not set. See .env.example');
@@ -87,12 +81,15 @@ if (!OPENAI_KEY) {
   process.exit(1);
 }
 
-// ── Resolved config (CLI env overrides config.json) ──
+// ── Merge env overrides into config ──
+// CLI env vars take precedence over config.json values.
 
-const model        = process.env.OPENAI_REALTIME_MODEL || appConfig.model        || 'gpt-realtime';
-const voice        = process.env.OPENAI_VOICE          || appConfig.voice        || 'coral';
-const systemPrompt = appConfig.systemPrompt || 'You are a voice assistant. Execute commands immediately. Be concise.';
-const turnDetection = appConfig.turnDetection || 'semantic_vad';
+const mergedConfig = {
+  provider:      'openai-realtime',  // default
+  ...appConfig,
+  model:  process.env.OPENAI_REALTIME_MODEL || appConfig.model || 'gpt-realtime',
+  voice:  process.env.OPENAI_VOICE          || appConfig.voice || 'coral',
+};
 
 // ── Discord client ──
 
@@ -106,14 +103,14 @@ const discord = new Client({
 });
 
 const discordVoice = new DiscordVoice();
-let realtime = null;
+let provider = null;
 let isStreamingResponse = false;
 
 // ── Discord ready ──
 
 discord.once(Events.ClientReady, async (client) => {
   console.log(`[BOT] Logged in as ${client.user.tag}`);
-  console.log(`[BOT] Model: ${model} | Voice: ${voice} | Tools: ${realtimeTools.length}`);
+  console.log(`[BOT] Provider: ${mergedConfig.provider} | Voice: ${mergedConfig.voice} | Tools: ${realtimeTools.length}`);
 
   if (VOICE_CHANNEL_ID && GUILD_ID) {
     const guild = client.guilds.cache.get(GUILD_ID);
@@ -147,15 +144,15 @@ discord.on(Events.MessageCreate, async (message) => {
 
   if (message.content === '!leave') {
     discordVoice.leave();
-    realtime?.disconnect();
-    realtime = null;
+    provider?.disconnect();
+    provider = null;
     await message.reply('👋 Left voice channel.');
   }
 
   if (message.content.startsWith('!say ')) {
     const text = message.content.slice(5);
-    if (realtime) {
-      realtime.sendText(text);
+    if (provider) {
+      provider.sendText(text);
       await message.reply(`📝 Sent: "${text}"`);
     } else {
       await message.reply('Not connected. Use !join first.');
@@ -163,14 +160,13 @@ discord.on(Events.MessageCreate, async (message) => {
   }
 
   if (message.content === '!status') {
-    const realtimeStatus = realtime?._connected ? '✅' : '❌';
+    const providerStatus = provider?._connected ? '✅' : '❌';
     const voiceStatus    = discordVoice.connection ? '✅' : '❌';
     await message.reply(
       `**OpenClaw Discord Realtime Voice Bridge**\n` +
       `Discord voice: ${voiceStatus}\n` +
-      `Realtime API: ${realtimeStatus}\n` +
-      `Model: ${model}\n` +
-      `Voice: ${voice}\n` +
+      `Provider: ${mergedConfig.provider} ${providerStatus}\n` +
+      `Voice: ${mergedConfig.voice}\n` +
       `Tools: ${realtimeTools.length} loaded\n` +
       `Config: ${configPath}\n` +
       `Tools config: ${toolsPath}`
@@ -185,30 +181,26 @@ async function startVoiceBridge(channel) {
 
   await discordVoice.join(channel);
 
-  realtime = new RealtimeClient(OPENAI_KEY, {
-    model,
-    voice,
-    systemPrompt,
-    turnDetection,
+  provider = createProvider(OPENAI_KEY, mergedConfig, {
     tools: realtimeTools,
     executeTool: executeToolFn,
   });
 
-  // Discord → Realtime API
+  // Discord → Provider
   discordVoice.on('audio', (pcmChunk) => {
-    realtime.sendAudio(pcmChunk);
+    provider.sendAudio(pcmChunk);
   });
 
-  // Barge-in: stop playback when user starts speaking
-  realtime.on('speech_started', () => {
+  // Barge-in: stop current playback when user starts speaking
+  provider.on('speech_started', () => {
     if (isStreamingResponse) {
       discordVoice.endPlayback();
       isStreamingResponse = false;
     }
   });
 
-  // Realtime API → Discord
-  realtime.on('audio', (pcmChunk) => {
+  // Provider → Discord
+  provider.on('audio', (pcmChunk) => {
     if (!isStreamingResponse) {
       discordVoice.startPlayback();
       isStreamingResponse = true;
@@ -216,32 +208,32 @@ async function startVoiceBridge(channel) {
     discordVoice.appendAudio(pcmChunk);
   });
 
-  realtime.on('audio_done', () => {
+  provider.on('audio_done', () => {
     discordVoice.endPlayback();
     isStreamingResponse = false;
   });
 
-  realtime.on('user_transcript', (text) => {
+  provider.on('user_transcript', (text) => {
     console.log(`🎤 User: ${text}`);
   });
 
-  realtime.on('assistant_transcript', (text) => {
+  provider.on('assistant_transcript', (text) => {
     console.log(`🤖 Assistant: ${text}`);
   });
 
-  realtime.on('error', (err) => {
-    console.error('[BRIDGE] Realtime error:', err.message);
+  provider.on('error', (err) => {
+    console.error('[BRIDGE] Provider error:', err.message);
   });
 
-  realtime.connect();
+  provider.connect();
 
-  realtime.once('ready', () => {
+  provider.once('ready', () => {
     if (LISTEN_USER_ID) {
       discordVoice.listenTo(LISTEN_USER_ID);
     } else {
       discordVoice.listenToAll();
     }
-    console.log('[BRIDGE] ✅ Voice bridge active.');
+    console.log(`[BRIDGE] ✅ Voice bridge active (provider: ${mergedConfig.provider}).`);
   });
 }
 
@@ -250,7 +242,7 @@ async function startVoiceBridge(channel) {
 process.on('SIGINT', () => {
   console.log('\n[BRIDGE] Shutting down...');
   discordVoice.leave();
-  realtime?.disconnect();
+  provider?.disconnect();
   discord.destroy();
   process.exit(0);
 });
@@ -258,6 +250,7 @@ process.on('SIGINT', () => {
 // ── Start ──
 
 console.log('🎙️ OpenClaw Discord Realtime Voice Bridge starting...');
-console.log(`   Config: ${configPath}`);
-console.log(`   Tools:  ${toolsPath}`);
+console.log(`   Config:   ${configPath}`);
+console.log(`   Tools:    ${toolsPath}`);
+console.log(`   Provider: ${mergedConfig.provider}`);
 discord.login(DISCORD_TOKEN);

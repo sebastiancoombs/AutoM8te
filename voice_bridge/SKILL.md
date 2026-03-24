@@ -1,7 +1,7 @@
 ---
 name: openclaw-discord-realtime
-description: Sub-500ms voice control via Discord voice + OpenAI Realtime API with custom function calling tools
-version: 1.0.0
+description: Sub-500ms voice control via Discord voice with configurable AI providers (OpenAI Realtime or ElevenLabs) and custom function calling tools
+version: 1.1.0
 metadata:
   openclaw:
     emoji: "🎙️"
@@ -35,6 +35,16 @@ openclaw-discord-realtime
 openclaw-discord-realtime --config examples/autom8te/config.json --tools examples/autom8te/tools.json
 ```
 
+## Providers
+
+Set `"provider"` in config.json to choose the AI backend:
+
+| Provider | Latency | Description |
+|----------|---------|-------------|
+| `openai-realtime` | ~500ms | Speech-to-speech via OpenAI Realtime API (default) |
+| `elevenlabs` | ~1–2s | ElevenLabs Scribe STT → OpenAI/Anthropic LLM → ElevenLabs TTS |
+| `local` | TBD | v2 placeholder — Whisper.cpp + Ollama + Piper (not yet implemented) |
+
 ## Configuration
 
 Two files control behaviour:
@@ -43,10 +53,23 @@ Two files control behaviour:
 
 ```json
 {
+  "provider": "openai-realtime",
   "systemPrompt": "You are a voice assistant. Be concise.",
   "voice": "coral",
   "model": "gpt-realtime",
   "turnDetection": "semantic_vad"
+}
+```
+
+For `elevenlabs`:
+```json
+{
+  "provider": "elevenlabs",
+  "llmProvider": "openai",
+  "llmModel": "gpt-4o",
+  "systemPrompt": "You are a voice assistant. Be concise.",
+  "voice": "JBFqnCBsd6RMkjVDRZzb",
+  "silenceMs": 800
 }
 ```
 
@@ -95,7 +118,9 @@ See the `examples/` directory:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DISCORD_BOT_TOKEN` | ✅ | Discord bot token |
-| `OPENAI_API_KEY` | ✅ | OpenAI API key |
+| `OPENAI_API_KEY` | ✅ | OpenAI API key (also used as LLM key for elevenlabs/openai) |
+| `ELEVENLABS_API_KEY` | elevenlabs provider | ElevenLabs API key |
+| `ANTHROPIC_API_KEY` | elevenlabs + anthropic LLM | Anthropic API key |
 | `DISCORD_GUILD_ID` | Optional | Guild to auto-join |
 | `DISCORD_VOICE_CHANNEL_ID` | Optional | Voice channel to auto-join |
 | `DISCORD_LISTEN_USER_ID` | Optional | Only listen to this user |

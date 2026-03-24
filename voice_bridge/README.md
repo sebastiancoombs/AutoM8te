@@ -10,22 +10,39 @@ Built as an [OpenClaw](https://openclaw.ai) skill. Available on [ClawHub](https:
 
 ## How It Works
 
+Two provider options — same Discord interface, different latency/quality trade-offs:
+
+### `openai-realtime` (default) — ~500ms
 ```
 You speak in Discord voice
     ↓
-Opus decode → PCM 24kHz mono
-    ↓
-OpenAI Realtime API (WebSocket)
-    → Speech recognition
-    → Reasoning + function calling
-    → Text-to-speech
+PCM 24kHz mono → OpenAI Realtime API (WebSocket)
+    → STT + reasoning + function calling + TTS in ONE pass
     ↓
 HTTP calls to YOUR endpoints (via tools.json)
     ↓
-Response audio → PCM → Opus → Discord voice
+Response audio → Discord voice
 ```
 
-Target latency: **~300–500ms** from end of speech to start of AI response.
+### `elevenlabs` — ~1–2s
+```
+You speak in Discord voice
+    ↓
+PCM → silence detection (VAD)
+    ↓
+ElevenLabs Scribe  (STT)
+    ↓
+OpenAI / Anthropic LLM  (reasoning + function calling)
+    ↓
+HTTP calls to YOUR endpoints (via tools.json)
+    ↓
+ElevenLabs TTS  (high-quality audio)
+    ↓
+Response audio → Discord voice
+```
+
+### `local` — v2 placeholder
+Planned: Whisper.cpp + Ollama + Piper/Kokoro. Fully offline, no cloud APIs. Not yet implemented.
 
 ---
 
@@ -80,10 +97,11 @@ openclaw-discord-realtime --config path/to/config.json --tools path/to/tools.jso
 
 ### config.json
 
-Controls the AI's personality and audio settings:
+Controls the provider, AI personality, and audio settings:
 
 ```json
 {
+  "provider": "openai-realtime",
   "systemPrompt": "You are a voice assistant. Execute commands immediately. Be concise.",
   "voice": "coral",
   "model": "gpt-realtime",
@@ -91,12 +109,17 @@ Controls the AI's personality and audio settings:
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `systemPrompt` | Instructions for the AI |
-| `voice` | OpenAI TTS voice (`alloy`, `coral`, `echo`, `fable`, `onyx`, `nova`, `shimmer`) |
-| `model` | OpenAI Realtime model |
-| `turnDetection` | VAD mode (`semantic_vad` recommended) |
+| Field | Provider | Description |
+|-------|----------|-------------|
+| `provider` | all | `"openai-realtime"` \| `"elevenlabs"` \| `"local"` |
+| `systemPrompt` | all | Instructions for the AI |
+| `voice` | all | OpenAI voice name **or** ElevenLabs voice ID |
+| `model` | `openai-realtime` | OpenAI Realtime model |
+| `turnDetection` | `openai-realtime` | VAD mode (`semantic_vad` recommended) |
+| `llmProvider` | `elevenlabs` | LLM backend: `"openai"` or `"anthropic"` |
+| `llmModel` | `elevenlabs` | LLM model name (e.g. `"gpt-4o"`, `"claude-opus-4-5"`) |
+| `silenceMs` | `elevenlabs` | ms of silence before processing speech (default: 800) |
+| `silenceThreshold` | `elevenlabs` | RMS level below which audio is silence (default: 200) |
 
 ### tools.json
 
@@ -133,7 +156,7 @@ Each tool maps to any HTTP endpoint — your own service, Home Assistant, a loca
 
 ### AutoM8te — Drone Swarm Control
 
-Control an ArduPilot drone swarm via voice:
+Control an ArduPilot drone swarm via voice (uses `openai-realtime` for minimum latency):
 
 ```bash
 openclaw-discord-realtime \
@@ -151,7 +174,7 @@ Tools: `drone_takeoff`, `drone_land`, `drone_goto`, `drone_formation`, `drone_br
 
 ### Home Assistant — Smart Home
 
-Control lights, thermostat, and doors:
+Control lights, thermostat, and doors (uses `elevenlabs` for higher-quality voice):
 
 ```bash
 openclaw-discord-realtime \
@@ -192,7 +215,13 @@ Tools: `turn_light_on`, `turn_light_off`, `set_thermostat`, `get_thermostat`, `l
 ```bash
 # Required
 DISCORD_BOT_TOKEN=your_discord_bot_token
-OPENAI_API_KEY=your_openai_api_key
+OPENAI_API_KEY=your_openai_api_key       # also used as LLM key for elevenlabs/openai
+
+# Required for elevenlabs provider
+ELEVENLABS_API_KEY=your_elevenlabs_key
+
+# Required for elevenlabs + anthropic LLM
+ANTHROPIC_API_KEY=your_anthropic_key
 
 # Optional: auto-join on startup
 DISCORD_GUILD_ID=your_guild_id
@@ -222,7 +251,10 @@ The skill itself is available as a **premium ClawHub skill** — a one-time purc
 
 ## Architecture Notes
 
-- **Single WebSocket** to OpenAI — no separate STT or TTS APIs
+- **Provider abstraction** — swap between `openai-realtime`, `elevenlabs`, or future `local` by changing one line in config.json
+- **Same tool config works across providers** — tools.json is provider-agnostic
+- **Single WebSocket** for `openai-realtime` — no separate STT or TTS APIs
+- **Cascaded HTTP calls** for `elevenlabs` — Scribe STT → LLM → ElevenLabs TTS
 - **Semantic VAD** for natural turn detection (no push-to-talk)
 - **Barge-in support** — speaking interrupts the AI's current response
 - **Streaming audio** — response starts playing before the AI finishes generating
