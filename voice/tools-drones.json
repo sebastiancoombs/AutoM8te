@@ -1,0 +1,154 @@
+{
+  "tools": [
+    {
+      "name": "drone_takeoff",
+      "description": "Take off a drone to specified altitude. Default drone is drone_1, default altitude is 10 meters.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/tools/drone_takeoff" },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "drone_id": { "type": "string", "description": "Drone ID (e.g. drone_1)" },
+          "altitude_m": { "type": "number", "description": "Target altitude in meters (1-120)" }
+        },
+        "required": ["drone_id"]
+      },
+      "defaults": { "altitude_m": 10 }
+    },
+    {
+      "name": "drone_land",
+      "description": "Land a drone at its current position.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/tools/drone_land" },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "drone_id": { "type": "string", "description": "Drone ID" }
+        },
+        "required": ["drone_id"]
+      }
+    },
+    {
+      "name": "drone_query",
+      "description": "Get telemetry/status for a drone (position, altitude, battery, state).",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/tools/drone_query" },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "drone_id": { "type": "string", "description": "Drone ID" }
+        },
+        "required": ["drone_id"]
+      }
+    },
+    {
+      "name": "drone_return_home",
+      "description": "Return a drone to its launch position and land.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/tools/drone_return_home" },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "drone_id": { "type": "string", "description": "Drone ID" }
+        },
+        "required": ["drone_id"]
+      }
+    },
+    {
+      "name": "drone_formation",
+      "description": "Command all drones into a formation. Types: line, v, circle, grid, stack.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/tools/drone_formation" },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "formation": { "type": "string", "description": "Formation type (line, v, circle, grid, stack)" },
+          "spacing_m": { "type": "number", "description": "Spacing between drones in meters" },
+          "alt_m": { "type": "number", "description": "Formation altitude in meters" }
+        },
+        "required": ["formation"]
+      },
+      "defaults": { "spacing_m": 10, "alt_m": 10 }
+    },
+    {
+      "name": "drone_goto",
+      "description": "Fly a drone to GPS coordinates.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/tools/drone_goto" },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "drone_id": { "type": "string", "description": "Drone ID" },
+          "lat": { "type": "number", "description": "Latitude" },
+          "lon": { "type": "number", "description": "Longitude" },
+          "alt_m": { "type": "number", "description": "Altitude in meters" }
+        },
+        "required": ["drone_id", "lat", "lon", "alt_m"]
+      }
+    },
+    {
+      "name": "drone_velocity",
+      "description": "Set velocity vector for a drone (NED frame). Negative vz = climb.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/tools/drone_velocity" },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "drone_id": { "type": "string", "description": "Drone ID" },
+          "vx_ms": { "type": "number", "description": "North velocity m/s" },
+          "vy_ms": { "type": "number", "description": "East velocity m/s" },
+          "vz_ms": { "type": "number", "description": "Down velocity m/s (negative=climb)" }
+        },
+        "required": ["drone_id", "vx_ms", "vy_ms", "vz_ms"]
+      }
+    },
+    {
+      "name": "drone_broadcast",
+      "description": "Send a command to ALL drones. Commands: takeoff, land, return_home, emergency_stop.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/tools/drone_broadcast" },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string", "description": "Command to broadcast" },
+          "altitude_m": { "type": "number", "description": "Altitude for takeoff command" }
+        },
+        "required": ["command"]
+      }
+    },
+    {
+      "name": "list_drones",
+      "description": "List all registered drones with their current telemetry.",
+      "endpoint": { "method": "GET", "url": "http://localhost:8000/drones" },
+      "parameters": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "drone_orbit",
+      "description": "Orbit a drone around a GPS point.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/tools/drone_orbit" },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "drone_id": { "type": "string", "description": "Drone ID" },
+          "center_lat": { "type": "number", "description": "Center latitude" },
+          "center_lon": { "type": "number", "description": "Center longitude" },
+          "radius_m": { "type": "number", "description": "Orbit radius in meters" },
+          "alt_m": { "type": "number", "description": "Orbit altitude" }
+        },
+        "required": ["drone_id", "center_lat", "center_lon"]
+      },
+      "defaults": { "radius_m": 20, "alt_m": 10 }
+    },
+    {
+      "name": "drone_search",
+      "description": "Search an area with a drone using grid, spiral, or expanding pattern.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/tools/drone_search" },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "drone_id": { "type": "string", "description": "Drone ID" },
+          "min_lat": { "type": "number" },
+          "min_lon": { "type": "number" },
+          "max_lat": { "type": "number" },
+          "max_lon": { "type": "number" },
+          "alt_m": { "type": "number" },
+          "pattern": { "type": "string", "description": "Pattern: grid, spiral, expanding" }
+        },
+        "required": ["drone_id", "min_lat", "min_lon", "max_lat", "max_lon"]
+      },
+      "defaults": { "alt_m": 15, "pattern": "grid" }
+    }
+  ]
+}

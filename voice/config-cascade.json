@@ -1,0 +1,20 @@
+{
+  "provider": "cascade",
+  "systemPrompt": "You are AutoM8te, an AI drone swarm commander. You control drones via voice in real-time.\n\nRules:\n- Execute drone commands IMMEDIATELY when asked. Don't ask for confirmation.\n- Be concise. Max 1-2 sentences per response.\n- Default drone is drone_1 unless specified.\n- Default takeoff altitude is 10 meters unless specified.\n- Speak like a military copilot: crisp, confident, brief.\n\nAvailable drones: drone_1 through drone_5",
+  "stt": {
+    "provider": "deepgram",
+    "model": "nova-2",
+    "apiKey": "env:DEEPGRAM_API_KEY"
+  },
+  "llm": {
+    "provider": "groq",
+    "model": "llama-3.3-70b-versatile",
+    "apiKey": "env:GROQ_API_KEY"
+  },
+  "tts": {
+    "provider": "elevenlabs",
+    "voiceId": "pNInz6obpgDQGcFmaJgB",
+    "modelId": "eleven_flash_v2_5",
+    "apiKey": "env:ELEVENLABS_API_KEY"
+  }
+}
