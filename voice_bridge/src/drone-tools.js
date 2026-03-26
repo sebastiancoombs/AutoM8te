@@ -1,38 +1,48 @@
 /**
  * AutoM8te Voice Bridge — Drone Tool Definitions & Executor
  *
- * Defines the tools that get registered with the OpenAI Realtime API session,
- * and handles executing them against the Swarm Manager HTTP API.
+ * Uses the consolidated /api/* endpoints from the Swarm Manager.
+ * These are smarter and more capable than individual /tools/* routes.
+ * Fewer tools = faster function calling = lower latency.
+ *
+ * Also includes ask_openclaw escape hatch for complex reasoning.
  */
 
 import { config } from './config.js';
 
 const BASE = config.swarmManager.url;
 
-// ── Tool Definitions (OpenAI function calling format) ──────
+// ── Tool Definitions (OpenAI Realtime function calling format) ──
 
 export const DRONE_TOOLS = [
   {
     type: 'function',
-    name: 'drone_takeoff',
-    description: 'Take off a drone to specified altitude. Default drone is drone_1, default altitude is 10 meters.',
+    name: 'drone_command',
+    description: 'Execute a single-drone command. Actions: takeoff, land, hover, set_yaw, change_speed, change_altitude, return_home, emergency_stop, pause, resume. Pass action-specific params (e.g. altitude_m for takeoff, heading_deg for set_yaw, speed_m_s for change_speed).',
     parameters: {
       type: 'object',
       properties: {
-        drone_id: { type: 'string', description: 'Drone ID (e.g. drone_1)', default: 'drone_1' },
-        altitude_m: { type: 'number', description: 'Target altitude in meters (1-120)', default: 10 },
+        drone_id: { type: 'string', description: 'Drone ID (e.g. drone_1). Default: drone_1' },
+        action: { type: 'string', description: 'Command: takeoff, land, hover, set_yaw, change_speed, change_altitude, return_home, emergency_stop, pause, resume' },
+        params: { type: 'object', description: 'Action-specific params: {altitude_m, heading_deg, speed_m_s, alt_m}' },
       },
-      required: ['drone_id'],
+      required: ['drone_id', 'action'],
     },
   },
   {
     type: 'function',
-    name: 'drone_land',
-    description: 'Land a drone at its current position.',
+    name: 'drone_move',
+    description: 'Move a drone: simple goto (lat/lon/alt), named path (s_curve, zigzag, arc, spiral, figure_eight, racetrack, ellipse, straight), or custom waypoints. Supports easing and looping.',
     parameters: {
       type: 'object',
       properties: {
         drone_id: { type: 'string', description: 'Drone ID' },
+        target: { type: 'object', description: 'Simple goto: {lat, lon, alt_m, heading_deg}' },
+        path: { type: 'string', description: 'Named path: s_curve, zigzag, arc, spiral, figure_eight, racetrack, ellipse, straight' },
+        path_params: { type: 'object', description: 'Path generator params (varies by type)' },
+        easing: { type: 'string', description: 'Easing: ease_in_out, linear, elastic, spring' },
+        duration_s: { type: 'number', description: 'Flight duration in seconds' },
+        loop: { type: 'boolean', description: 'Loop the path continuously' },
       },
       required: ['drone_id'],
     },
@@ -40,19 +50,76 @@ export const DRONE_TOOLS = [
   {
     type: 'function',
     name: 'drone_query',
-    description: 'Get telemetry/status for a specific drone (position, altitude, battery, state).',
+    description: 'Get telemetry for a specific drone or all drones. Returns position, altitude, battery, mode, speed, heading.',
     parameters: {
       type: 'object',
       properties: {
-        drone_id: { type: 'string', description: 'Drone ID' },
+        drone_id: { type: 'string', description: 'Drone ID. Omit for all drones.' },
       },
-      required: ['drone_id'],
     },
   },
   {
     type: 'function',
-    name: 'list_drones',
-    description: 'List all registered drones with their current telemetry. No parameters needed.',
+    name: 'drone_swarm',
+    description: 'Fan any single-drone command to ALL drones or a subset. Use for "all drones take off", "everyone land", etc.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: 'Command to fan out: takeoff, land, return_home, hover, emergency_stop' },
+        params: { type: 'object', description: 'Command params (e.g. {altitude_m: 10} for takeoff)' },
+        drone_ids: { type: 'array', items: { type: 'string' }, description: 'Target drone IDs. Omit for all.' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'drone_formation',
+    description: 'Arrange drones into a formation. Types: line, v, vee, circle, ring, grid, square, stack, column. Can also do animated transitions between formations.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Formation: line, v, vee, circle, ring, grid, square, stack, column' },
+        spacing_m: { type: 'number', description: 'Spacing between drones in meters (default 10)' },
+        alt_m: { type: 'number', description: 'Formation altitude in meters (default 10)' },
+        heading_deg: { type: 'number', description: 'Formation heading (default 0 = north)' },
+        transition_to: { type: 'string', description: 'Target formation for animated transition' },
+        easing: { type: 'string', description: 'Easing for transitions' },
+        duration_s: { type: 'number', description: 'Transition duration in seconds' },
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'drone_search',
+    description: 'Search an area with one drone or the whole swarm. Patterns: grid (lawnmower), spiral (inward), expanding (SAR).',
+    parameters: {
+      type: 'object',
+      properties: {
+        area: { type: 'object', description: 'Search bounds: {min_lat, min_lon, max_lat, max_lon}' },
+        drone_id: { type: 'string', description: 'Drone ID. Omit for swarm search.' },
+        pattern: { type: 'string', description: 'Pattern: grid, spiral, expanding' },
+        alt_m: { type: 'number', description: 'Search altitude in meters (default 20)' },
+      },
+      required: ['area'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'drone_stop',
+    description: 'Stop drone activity: paths, transitions, or everything. Omit drone_id to stop all drones.',
+    parameters: {
+      type: 'object',
+      properties: {
+        drone_id: { type: 'string', description: 'Drone ID. Omit for all.' },
+        what: { type: 'string', description: 'What to stop: path, transition, all (default: all)' },
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'drone_status',
+    description: 'Get full system status: all drones, capabilities, running tasks. No parameters needed.',
     parameters: {
       type: 'object',
       properties: {},
@@ -60,143 +127,48 @@ export const DRONE_TOOLS = [
   },
   {
     type: 'function',
-    name: 'drone_return_home',
-    description: 'Return a drone to its launch position and land.',
+    name: 'ask_openclaw',
+    description: 'Delegate a complex request to the full AutoM8te AI agent (Claude Opus). Use for: multi-step planning, code generation, memory search, analysis, or anything beyond direct drone commands. Response may take 5-10 seconds.',
     parameters: {
       type: 'object',
       properties: {
-        drone_id: { type: 'string', description: 'Drone ID' },
+        message: { type: 'string', description: 'The request or question to send to the full AI agent' },
       },
-      required: ['drone_id'],
-    },
-  },
-  {
-    type: 'function',
-    name: 'drone_formation',
-    description: 'Command all drones into a formation. Types: line, v, circle, grid, stack.',
-    parameters: {
-      type: 'object',
-      properties: {
-        formation: { type: 'string', description: 'Formation type (line, v, circle, grid, stack)' },
-        spacing_m: { type: 'number', description: 'Spacing between drones in meters', default: 10 },
-        alt_m: { type: 'number', description: 'Formation altitude in meters', default: 10 },
-      },
-      required: ['formation'],
-    },
-  },
-  {
-    type: 'function',
-    name: 'drone_goto',
-    description: 'Fly a drone to GPS coordinates.',
-    parameters: {
-      type: 'object',
-      properties: {
-        drone_id: { type: 'string', description: 'Drone ID' },
-        lat: { type: 'number', description: 'Latitude' },
-        lon: { type: 'number', description: 'Longitude' },
-        alt_m: { type: 'number', description: 'Altitude in meters' },
-      },
-      required: ['drone_id', 'lat', 'lon', 'alt_m'],
-    },
-  },
-  {
-    type: 'function',
-    name: 'drone_velocity',
-    description: 'Set velocity vector for a drone (NED frame). Negative vz = climb.',
-    parameters: {
-      type: 'object',
-      properties: {
-        drone_id: { type: 'string', description: 'Drone ID' },
-        vx_ms: { type: 'number', description: 'North velocity m/s' },
-        vy_ms: { type: 'number', description: 'East velocity m/s' },
-        vz_ms: { type: 'number', description: 'Down velocity m/s (negative=climb)' },
-      },
-      required: ['drone_id', 'vx_ms', 'vy_ms', 'vz_ms'],
-    },
-  },
-  {
-    type: 'function',
-    name: 'drone_broadcast',
-    description: 'Send command to ALL drones. Commands: takeoff, land, return_home, emergency_stop.',
-    parameters: {
-      type: 'object',
-      properties: {
-        command: { type: 'string', description: 'Command to broadcast (takeoff, land, return_home, emergency_stop)' },
-        altitude_m: { type: 'number', description: 'Altitude for takeoff command', default: 10 },
-      },
-      required: ['command'],
-    },
-  },
-  {
-    type: 'function',
-    name: 'drone_orbit',
-    description: 'Orbit a drone around a GPS point.',
-    parameters: {
-      type: 'object',
-      properties: {
-        drone_id: { type: 'string', description: 'Drone ID' },
-        center_lat: { type: 'number', description: 'Center latitude' },
-        center_lon: { type: 'number', description: 'Center longitude' },
-        radius_m: { type: 'number', description: 'Orbit radius in meters', default: 20 },
-        alt_m: { type: 'number', description: 'Orbit altitude', default: 10 },
-      },
-      required: ['drone_id', 'center_lat', 'center_lon'],
-    },
-  },
-  {
-    type: 'function',
-    name: 'drone_hover',
-    description: 'Hold a drone at its current position (stop all movement).',
-    parameters: {
-      type: 'object',
-      properties: {
-        drone_id: { type: 'string', description: 'Drone ID' },
-      },
-      required: ['drone_id'],
-    },
-  },
-  {
-    type: 'function',
-    name: 'drone_emergency_stop',
-    description: 'EMERGENCY: Immediately stop all motors on a drone. USE WITH CAUTION.',
-    parameters: {
-      type: 'object',
-      properties: {
-        drone_id: { type: 'string', description: 'Drone ID' },
-      },
-      required: ['drone_id'],
+      required: ['message'],
     },
   },
 ];
 
 
+// ── Tool Routing ───────────────────────────────────────────
+
+const TOOL_ROUTES = {
+  drone_command:   { method: 'POST', path: '/api/command' },
+  drone_move:      { method: 'POST', path: '/api/move' },
+  drone_query:     { method: 'POST', path: '/api/query' },
+  drone_swarm:     { method: 'POST', path: '/api/swarm' },
+  drone_formation: { method: 'POST', path: '/api/formation' },
+  drone_search:    { method: 'POST', path: '/api/search' },
+  drone_stop:      { method: 'POST', path: '/api/stop' },
+  drone_status:    { method: 'GET',  path: '/api/status' },
+};
+
+
 // ── Tool Execution ─────────────────────────────────────────
 
 /**
- * Mapping from tool name to HTTP method + URL path.
- */
-const TOOL_ROUTES = {
-  drone_takeoff:        { method: 'POST', path: '/tools/drone_takeoff' },
-  drone_land:           { method: 'POST', path: '/tools/drone_land' },
-  drone_query:          { method: 'POST', path: '/tools/drone_query' },
-  list_drones:          { method: 'GET',  path: '/drones' },
-  drone_return_home:    { method: 'POST', path: '/tools/drone_return_home' },
-  drone_formation:      { method: 'POST', path: '/tools/drone_formation' },
-  drone_goto:           { method: 'POST', path: '/tools/drone_goto' },
-  drone_velocity:       { method: 'POST', path: '/tools/drone_velocity' },
-  drone_broadcast:      { method: 'POST', path: '/tools/drone_broadcast' },
-  drone_orbit:          { method: 'POST', path: '/tools/drone_orbit' },
-  drone_hover:          { method: 'POST', path: '/tools/drone_hover' },
-  drone_emergency_stop: { method: 'POST', path: '/tools/drone_emergency_stop' },
-};
-
-/**
  * Execute a drone tool by calling the Swarm Manager HTTP API.
+ * Special handling for ask_openclaw which goes to OpenClaw gateway.
  * @param {string} toolName - Name of the tool to execute
  * @param {object} args - Parsed arguments from the Realtime API
  * @returns {Promise<string>} JSON string result for the Realtime API
  */
 export async function executeTool(toolName, args) {
+  // Special case: ask_openclaw goes to OpenClaw, not swarm manager
+  if (toolName === 'ask_openclaw') {
+    return executeAskOpenClaw(args.message || '');
+  }
+
   const route = TOOL_ROUTES[toolName];
   if (!route) {
     return JSON.stringify({ error: `Unknown tool: ${toolName}` });
@@ -228,5 +200,58 @@ export async function executeTool(toolName, args) {
   } catch (err) {
     console.error(`❌ Tool execution failed: ${toolName}`, err.message);
     return JSON.stringify({ error: err.message });
+  }
+}
+
+
+/**
+ * Execute ask_openclaw: send a message to the OpenClaw autom8te agent.
+ * Uses the OpenClaw gateway REST API if available, otherwise returns a fallback.
+ * @param {string} message - The message to send
+ * @returns {Promise<string>} JSON string result
+ */
+async function executeAskOpenClaw(message) {
+  const startMs = Date.now();
+  console.log(`🧠 ask_openclaw: "${message.substring(0, 100)}..."`);
+
+  // Try the OpenClaw gateway API
+  // The gateway URL and token can be configured via env vars
+  const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || 'http://localhost:3284';
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || '';
+
+  try {
+    const resp = await fetch(`${gatewayUrl}/api/v1/sessions/send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(gatewayToken ? { 'Authorization': `Bearer ${gatewayToken}` } : {}),
+      },
+      body: JSON.stringify({
+        label: 'autom8te',
+        message: `[Voice Bridge Request] ${message}`,
+        timeoutSeconds: 30,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (resp.ok) {
+      const data = await resp.json();
+      const elapsed = Date.now() - startMs;
+      console.log(`   ↳ OpenClaw responded in ${elapsed}ms`);
+      return JSON.stringify({ response: data.response || data.message || JSON.stringify(data) });
+    }
+
+    // Fallback: gateway responded but with error
+    const text = await resp.text();
+    console.warn(`⚠️  OpenClaw gateway error: ${resp.status} - ${text.substring(0, 200)}`);
+    return JSON.stringify({
+      response: `I can't reach the full AI agent right now (HTTP ${resp.status}). Let me answer from what I know about the drone swarm. What specifically do you need?`,
+    });
+  } catch (err) {
+    const elapsed = Date.now() - startMs;
+    console.warn(`⚠️  ask_openclaw failed in ${elapsed}ms: ${err.message}`);
+    return JSON.stringify({
+      response: `The full AI agent isn't reachable right now. I can still control drones directly. What would you like me to do?`,
+    });
   }
 }

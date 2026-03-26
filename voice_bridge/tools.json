@@ -1,0 +1,50 @@
+{
+  "description": "Tools registered with OpenAI Realtime API for voice-controlled drone swarm. Maps to consolidated /api/* endpoints on the Swarm Manager.",
+  "tools": [
+    {
+      "name": "drone_command",
+      "description": "Execute a single-drone command: takeoff, land, hover, set_yaw, change_speed, change_altitude, return_home, emergency_stop, pause, resume.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/api/command" }
+    },
+    {
+      "name": "drone_move",
+      "description": "Move a drone: simple goto, named path, or custom waypoints.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/api/move" }
+    },
+    {
+      "name": "drone_query",
+      "description": "Get telemetry for one drone or all drones.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/api/query" }
+    },
+    {
+      "name": "drone_swarm",
+      "description": "Fan any command to all or a subset of drones.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/api/swarm" }
+    },
+    {
+      "name": "drone_formation",
+      "description": "Arrange drones into a formation or animate transitions.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/api/formation" }
+    },
+    {
+      "name": "drone_search",
+      "description": "Search an area with single drone or swarm.",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/api/search" }
+    },
+    {
+      "name": "drone_stop",
+      "description": "Stop drone activity (paths, transitions, or everything).",
+      "endpoint": { "method": "POST", "url": "http://localhost:8000/api/stop" }
+    },
+    {
+      "name": "drone_status",
+      "description": "Get full system status.",
+      "endpoint": { "method": "GET", "url": "http://localhost:8000/api/status" }
+    },
+    {
+      "name": "ask_openclaw",
+      "description": "Delegate complex requests to the full AutoM8te AI agent (Claude Opus).",
+      "endpoint": "OpenClaw Gateway sessions_send API"
+    }
+  ]
+}

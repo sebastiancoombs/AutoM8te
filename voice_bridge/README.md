@@ -9,15 +9,30 @@ Real-time voice control for the AutoM8te drone swarm via Discord + OpenAI Realti
 ```
 Discord Voice Channel (user speaks)
   → Opus decode → PCM 48kHz stereo → downsample → PCM 24kHz mono
-  → OpenAI Realtime API WebSocket (gpt-realtime)
+  → OpenAI Realtime API WebSocket (gpt-realtime, GA endpoint)
   → Speech-to-speech + function calling in ONE pass (~300ms)
   → When model calls a drone tool:
-      → HTTP POST to Swarm Manager (localhost:8000)
+      → HTTP to Swarm Manager consolidated /api/* endpoints
       → Result sent back to Realtime API
       → Model speaks the result
+  → For complex requests: ask_openclaw → OpenClaw Gateway → Claude Opus
   → Response audio → PCM 24kHz mono → upsample → PCM 48kHz stereo
   → Opus encode → Discord voice playback
 ```
+
+## Tools (9 total)
+
+| Tool | Swarm Manager Endpoint | Description |
+|------|----------------------|-------------|
+| `drone_command` | POST /api/command | Single-drone commands (takeoff, land, hover, etc.) |
+| `drone_move` | POST /api/move | Move drone: goto, named paths, custom waypoints |
+| `drone_query` | POST /api/query | Telemetry for one or all drones |
+| `drone_swarm` | POST /api/swarm | Fan commands to all/subset of drones |
+| `drone_formation` | POST /api/formation | Formations + animated transitions |
+| `drone_search` | POST /api/search | Area search patterns (grid, spiral, expanding) |
+| `drone_stop` | POST /api/stop | Stop paths, transitions, or everything |
+| `drone_status` | GET /api/status | Full system status |
+| `ask_openclaw` | OpenClaw Gateway | Escape hatch to full AI agent (Claude Opus) |
 
 ## Prerequisites
 
@@ -41,34 +56,27 @@ npm start
 ## Discord Bot Setup
 
 The voice bridge needs a Discord bot with these intents:
-- **Server Members Intent** (optional, for user identification)
 - **Message Content Intent** (for !commands)
-- **Voice** permissions
+- **Voice** permissions (connect, speak)
 
-You can either:
-1. Create a **new bot** dedicated to voice control
-2. Use the **same bot token as OpenClaw** (both services can share a token if only one connects at a time)
-
-### Option 2: Sharing OpenClaw's Bot Token
-
-If you want the voice bridge to use the same Discord bot as OpenClaw, you'll need to stop OpenClaw's Discord connection while the voice bridge is running, or use a separate bot.
-
-**Recommended: Create a dedicated voice bot** with the name "AutoM8te Voice" for clarity.
+Options:
+1. Create a **dedicated voice bot** named "AutoM8te Voice" (recommended)
+2. Use the **same bot token as OpenClaw** (only if OpenClaw isn't using voice)
 
 ## Usage
 
-### Text Commands (in any Discord text channel)
+### Text Commands
 
 | Command | Description |
 |---------|-------------|
 | `!join` | Join your current voice channel |
 | `!leave` | Leave voice channel |
-| `!status` | Show bridge status (voice, Realtime API, swarm) |
-| `!text <msg>` | Send a text command to the Realtime model |
+| `!status` | Show bridge status |
+| `!text <msg>` | Send text command to Realtime model |
 
-### Voice Commands (in voice channel)
+### Voice Commands
 
-Just speak naturally:
+Speak naturally in the voice channel:
 
 - **"Take off"** → drone_1 takes off to 10m
 - **"Drone 3, take off to 20 meters"** → drone_3 takes off to 20m
@@ -76,26 +84,24 @@ Just speak naturally:
 - **"V formation"** → all drones form a V
 - **"Land"** → drone_1 lands
 - **"Status"** → telemetry readback
-- **"Orbit"** → drone_1 orbits
-- **"Emergency stop"** → kills motors
+- **"Fly a spiral"** → drone_1 flies a spiral path
+- **"Transition to circle formation"** → animated formation change
 - **"Come home"** → return to launch
+- **"Emergency stop"** → kills motors
+- **"What's the best search pattern for this area?"** → ask_openclaw for complex reasoning
 
 ### Barge-in
 
-Start speaking while the model is responding — it will stop immediately and listen to you. Just like a real copilot.
+Start speaking while the model is responding — it stops immediately and listens.
 
-## Configuration
-
-See `.env.example` for all configuration options.
-
-### Audio Pipeline
+## Audio Pipeline
 
 ```
 Discord → Opus → PCM 48kHz/stereo → DownsampleTransform → PCM 24kHz/mono → Realtime API
 Realtime API → PCM 24kHz/mono → UpsampleTransform → PCM 48kHz/stereo → Opus → Discord
 ```
 
-### Costs
+## Costs
 
 | Component | Cost |
 |-----------|------|
@@ -103,20 +109,20 @@ Realtime API → PCM 24kHz/mono → UpsampleTransform → PCM 48kHz/stereo → O
 | OpenAI Realtime (audio output) | ~$0.24/min |
 | **Total** | **~$0.30/min** |
 
-For a typical 5-minute drone control session: ~$1.50
-
 ## Files
 
 ```
 voice_bridge/
 ├── package.json
 ├── .env.example
+├── .env
+├── tools.json          # Tool reference documentation
 ├── README.md
 └── src/
-    ├── index.js              # Main entry point + Discord bot
+    ├── index.js              # Discord bot + command handler
     ├── config.js             # Configuration loader
-    ├── realtime-session.js   # OpenAI Realtime API WebSocket client
-    ├── discord-voice.js      # Discord voice capture + playback
-    ├── drone-tools.js        # Tool definitions + Swarm Manager HTTP executor
+    ├── realtime-session.js   # OpenAI Realtime API WebSocket client (GA format)
+    ├── discord-voice.js      # Discord voice capture + playback + resampling
+    ├── drone-tools.js        # 9 tools + consolidated API executor + ask_openclaw
     └── system-prompt.js      # Voice commander personality
 ```
