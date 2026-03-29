@@ -121,12 +121,32 @@ class DroneTools:
         """
         # Mode 1: Simple goto
         if target and not path and not waypoints:
-            result = await self._run_sync(
-                self.router.goto, drone_id,
-                target['lat'], target['lon'], target.get('alt_m', 10.0),
-                target.get('heading_deg', 0.0)
-            )
-            return result
+            # Support both GPS {lat, lon} and NED {north_m, east_m, alt_m}
+            if 'lat' in target and 'lon' in target:
+                # GPS mode — direct goto
+                result = await self._run_sync(
+                    self.router.goto, drone_id,
+                    target['lat'], target['lon'], target.get('alt_m', 10.0),
+                    target.get('heading_deg', 0.0)
+                )
+                return result
+            elif 'north_m' in target or 'east_m' in target:
+                # NED mode — convert relative offsets to GPS
+                state = self.registry.get_drone(drone_id)
+                origin_lat = state.lat
+                origin_lon = state.lon
+                north = target.get('north_m', 0.0)
+                east = target.get('east_m', 0.0)
+                alt = target.get('alt_m', state.relative_alt_mm / 1000.0)
+                gps = _ned_to_gps(origin_lat, origin_lon, north, east, alt)
+                result = await self._run_sync(
+                    self.router.goto, drone_id,
+                    gps.lat, gps.lon, gps.alt_m,
+                    target.get('heading_deg', 0.0)
+                )
+                return result
+            else:
+                return {'status': 'error', 'message': 'target must have {lat, lon} or {north_m, east_m, alt_m}'}
 
         # Get drone's current position for GPS conversion
         state = self.registry.get_drone(drone_id)
@@ -263,7 +283,14 @@ class DroneTools:
             # Build 'from' matrix from current positions or named formation
             if name:
                 try:
-                    from_matrix = SwarmMatrix.from_formation(name, n, spacing_m=spacing_m, alt_m=alt_m)
+                    name_l = name.lower()
+                    if name_l in ('circle', 'ring'):
+                        from_kw = {'radius_m': spacing_m, 'alt_m': alt_m}
+                    elif name_l in ('stack', 'column'):
+                        from_kw = {'vertical_spacing_m': spacing_m, 'base_alt_m': alt_m}
+                    else:
+                        from_kw = {'spacing_m': spacing_m, 'alt_m': alt_m}
+                    from_matrix = SwarmMatrix.from_formation(name, n, **from_kw)
                 except Exception:
                     from_matrix = SwarmMatrix(np.array([[p.lat, p.lon, p.alt_m] for p in current_positions]))
             else:
@@ -277,9 +304,15 @@ class DroneTools:
 
             # Build 'to' matrix
             if transition_to:
-                to_kwargs = {'spacing_m': spacing_m, 'alt_m': alt_m}
-                if transition_to.lower() in ('circle', 'ring'):
+                to_lower = transition_to.lower()
+                if to_lower in ('circle', 'ring'):
                     to_kwargs = {'radius_m': spacing_m, 'alt_m': alt_m}
+                elif to_lower in ('stack', 'column'):
+                    to_kwargs = {'vertical_spacing_m': spacing_m, 'base_alt_m': alt_m}
+                else:
+                    to_kwargs = {'spacing_m': spacing_m, 'alt_m': alt_m}
+                if to_lower in ('line', 'v', 'vee'):
+                    to_kwargs['heading_deg'] = heading_deg
                 to_matrix = SwarmMatrix.from_formation(transition_to, n, **to_kwargs)
             elif transition_coords:
                 to_matrix = SwarmMatrix.from_coordinates(transition_coords)
@@ -335,10 +368,15 @@ class DroneTools:
         if coordinates:
             matrix = SwarmMatrix.from_coordinates(coordinates)
         elif name:
-            form_kwargs = {'spacing_m': spacing_m, 'alt_m': alt_m}
-            if name.lower() in ('circle', 'ring'):
+            # Map generic params to formation-specific kwargs
+            name_lower = name.lower()
+            if name_lower in ('circle', 'ring'):
                 form_kwargs = {'radius_m': spacing_m, 'alt_m': alt_m}
-            if name.lower() in ('line', 'v', 'vee'):
+            elif name_lower in ('stack', 'column'):
+                form_kwargs = {'vertical_spacing_m': spacing_m, 'base_alt_m': alt_m}
+            else:
+                form_kwargs = {'spacing_m': spacing_m, 'alt_m': alt_m}
+            if name_lower in ('line', 'v', 'vee'):
                 form_kwargs['heading_deg'] = heading_deg
             matrix = SwarmMatrix.from_formation(name, n, **form_kwargs)
         else:

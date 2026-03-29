@@ -83,8 +83,8 @@ export class RealtimeSession extends EventEmitter {
         type: 'realtime',
         model: config.openai.model,
         instructions: SYSTEM_PROMPT,
-        // Both audio and text output — text gives us transcripts for logging
-        output_modalities: ['audio', 'text'],
+        // GA API only supports single modality — audio for voice, transcripts come via separate events
+        output_modalities: ['audio'],
         audio: {
           input: {
             format: {
@@ -103,6 +103,7 @@ export class RealtimeSession extends EventEmitter {
           output: {
             format: {
               type: 'audio/pcm',
+              rate: 24000,
             },
             voice: config.openai.voice,
           },

@@ -1,0 +1,13 @@
+{
+  "name": "autom8te-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "description": "AutoM8te MCP Server — Drone swarm control via Aerostack2",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}

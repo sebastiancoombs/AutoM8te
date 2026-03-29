@@ -1,0 +1,15 @@
+{
+  "id": "autom8te",
+  "name": "AutoM8te Drone Swarm",
+  "description": "8 drone swarm control tools for the AutoM8te Swarm Manager",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "serverUrl": {
+        "type": "string",
+        "default": "http://localhost:8000"
+      }
+    },
+    "additionalProperties": false
+  }
+}

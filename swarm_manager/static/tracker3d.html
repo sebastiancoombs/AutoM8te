@@ -2,43 +2,35 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>AutoM8te — 3D Drone Tracker</title>
+<title>AutoM8te — 3D Swarm Tracker</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box }
 body { background: #0a0a12; color: #eee; font-family: -apple-system, system-ui, sans-serif; overflow: hidden }
 #c { width: 100vw; height: 100vh; display: block }
-#hud { position: fixed; bottom: 0; left: 0; right: 0; padding: 12px 20px; background: rgba(10,10,18,.85);
-  backdrop-filter: blur(10px); display: flex; gap: 24px; align-items: center; border-top: 1px solid #222; z-index: 10 }
-.stat { display: flex; flex-direction: column }
-.stat .label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 1px }
-.stat .val { font-size: 20px; font-weight: 700 }
+#hud { position: fixed; bottom: 0; left: 0; right: 0; padding: 10px 16px; background: rgba(10,10,18,.85);
+  backdrop-filter: blur(10px); display: flex; gap: 10px; flex-wrap: wrap; border-top: 1px solid #222; z-index: 10; max-height: 30vh; overflow-y: auto }
+.drone-hud { background: rgba(30,30,40,.8); border-radius: 8px; padding: 8px 12px; border: 1px solid #333; min-width: 140px; flex: 1 }
+.drone-hud .name { font-size: 12px; font-weight: 700; margin-bottom: 4px }
+.drone-hud .stat { font-size: 11px; color: #aaa; margin: 1px 0 }
+.drone-hud .stat b { color: #eee }
+.armed-b { color: #f55 } .disarmed-b { color: #555 }
 #title { position: fixed; top: 16px; left: 20px; font-size: 15px; font-weight: 600; z-index: 10;
   background: rgba(10,10,18,.7); padding: 8px 14px; border-radius: 8px; backdrop-filter: blur(8px) }
 #title span { color: #4af }
-.armed { color: #f55 !important } .disarmed { color: #666 }
-.mode { color: #4af } .alt { color: #4f8 } .spd { color: #fa4 } .bat { color: #af4 }
 #controls { position: fixed; top: 16px; right: 20px; z-index: 10; display: flex; gap: 8px }
 #controls button { padding: 8px 16px; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px }
 .btn-g { background: #2a6; color: #fff } .btn-r { background: #c44; color: #fff } .btn-y { background: #a80; color: #fff }
 </style>
 </head>
 <body>
-<div id="title">🚁 <span>AutoM8te</span> 3D Tracker</div>
+<div id="title">🚁 <span>AutoM8te</span> 3D Swarm Tracker</div>
 <div id="controls">
-  <button class="btn-g" onclick="cmd('/tools/drone_takeoff',{drone_id:'drone_1',altitude_m:10})">Takeoff</button>
-  <button class="btn-r" onclick="cmd('/tools/drone_land',{drone_id:'drone_1'})">Land</button>
-  <button class="btn-y" onclick="cmd('/tools/drone_return_home',{drone_id:'drone_1'})">RTL</button>
+  <button class="btn-g" onclick="swarmCmd('takeoff',{altitude_m:10})">All Takeoff</button>
+  <button class="btn-r" onclick="swarmCmd('land',{})">All Land</button>
+  <button class="btn-y" onclick="swarmCmd('return_home',{})">All RTL</button>
 </div>
 <canvas id="c"></canvas>
-<div id="hud">
-  <div class="stat"><span class="label">Status</span><span class="val disarmed" id="arm">DISARMED</span></div>
-  <div class="stat"><span class="label">Mode</span><span class="val mode" id="mode">--</span></div>
-  <div class="stat"><span class="label">Altitude</span><span class="val alt" id="alt">--</span></div>
-  <div class="stat"><span class="label">Speed</span><span class="val spd" id="spd">--</span></div>
-  <div class="stat"><span class="label">Battery</span><span class="val bat" id="bat">--</span></div>
-  <div class="stat"><span class="label">GPS</span><span class="val" id="gps">--</span></div>
-  <div class="stat"><span class="label">Position</span><span class="val" id="pos" style="font-size:12px;color:#888">--</span></div>
-</div>
+<div id="hud"></div>
 
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
@@ -50,232 +42,231 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const API = window.location.origin;
 const canvas = document.getElementById('c');
+const COLORS = [0x44aaff, 0xff4444, 0x22aa66, 0xaa8800, 0xcc44ff, 0xffff00, 0x00ffff, 0xff8800];
 
-// Scene
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0a18);
 scene.fog = new THREE.Fog(0x0a0a18, 80, 200);
 
-// Camera
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 500);
-camera.position.set(15, 12, 15);
+camera.position.set(20, 18, 20);
 
-// Renderer
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 
-// Controls
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.05;
 controls.target.set(0, 3, 0);
 
-// Lights
 scene.add(new THREE.AmbientLight(0x334466, 1.5));
 const sun = new THREE.DirectionalLight(0xffeedd, 2);
 sun.position.set(20, 30, 10);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
 scene.add(sun);
 
-// Ground grid
-const gridSize = 100;
-const grid = new THREE.GridHelper(gridSize, gridSize, 0x1a2a3a, 0x111a22);
+const grid = new THREE.GridHelper(100, 100, 0x1a2a3a, 0x111a22);
 scene.add(grid);
 
-// Ground plane (for shadows)
-const groundGeo = new THREE.PlaneGeometry(gridSize, gridSize);
-const groundMat = new THREE.MeshStandardMaterial({ color: 0x0d1117, roughness: 1 });
-const ground = new THREE.Mesh(groundGeo, groundMat);
+const groundGeo = new THREE.PlaneGeometry(100, 100);
+const ground = new THREE.Mesh(groundGeo, new THREE.MeshStandardMaterial({ color: 0x0d1117, roughness: 1 }));
 ground.rotation.x = -Math.PI/2;
 ground.position.y = -0.01;
 ground.receiveShadow = true;
 scene.add(ground);
 
 // Home marker
-const homeGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.05, 32);
-const homeMat = new THREE.MeshStandardMaterial({ color: 0x44aaff, emissive: 0x224466 });
-const home = new THREE.Mesh(homeGeo, homeMat);
-home.position.y = 0.03;
-scene.add(home);
+const homeRing = new THREE.Mesh(
+  new THREE.RingGeometry(0.6, 0.8, 32),
+  new THREE.MeshBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.3, side: THREE.DoubleSide })
+);
+homeRing.rotation.x = -Math.PI/2;
+homeRing.position.y = 0.04;
+scene.add(homeRing);
 
-// Home ring pulse
-const ringGeo = new THREE.RingGeometry(0.6, 0.8, 32);
-const ringMat = new THREE.MeshBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.3, side: THREE.DoubleSide });
-const ring = new THREE.Mesh(ringGeo, ringMat);
-ring.rotation.x = -Math.PI/2;
-ring.position.y = 0.04;
-scene.add(ring);
-
-// Drone body
-const droneGroup = new THREE.Group();
-
-// Central body
-const bodyGeo = new THREE.BoxGeometry(0.6, 0.15, 0.6);
-const bodyMat = new THREE.MeshStandardMaterial({ color: 0x333340, metalness: 0.7, roughness: 0.3 });
-const body = new THREE.Mesh(bodyGeo, bodyMat);
-body.castShadow = true;
-droneGroup.add(body);
-
-// Arms + rotors
-const armPositions = [[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1]];
-const rotorMat = new THREE.MeshStandardMaterial({ color: 0x44aaff, emissive: 0x112244, metalness: 0.5 });
-const rotors = [];
-armPositions.forEach(([x,y,z]) => {
-  // Arm
-  const armGeo = new THREE.CylinderGeometry(0.03, 0.03, 1.2);
-  const armMat = new THREE.MeshStandardMaterial({ color: 0x444455 });
-  const arm = new THREE.Mesh(armGeo, armMat);
-  arm.rotation.z = Math.PI/2;
-  arm.position.set(x*0.4, 0, z*0.4);
-  arm.lookAt(x*0.8, 0, z*0.8);
-  droneGroup.add(arm);
-  // Motor
-  const motorGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.1, 8);
-  const motor = new THREE.Mesh(motorGeo, new THREE.MeshStandardMaterial({ color: 0x222233 }));
-  motor.position.set(x*0.7, 0.08, z*0.7);
-  droneGroup.add(motor);
-  // Rotor disc
-  const rotorGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.02, 16);
-  const rotor = new THREE.Mesh(rotorGeo, rotorMat.clone());
-  rotor.material.transparent = true;
-  rotor.material.opacity = 0.4;
-  rotor.position.set(x*0.7, 0.15, z*0.7);
-  droneGroup.add(rotor);
-  rotors.push(rotor);
-});
-
-// LED on front
-const ledGeo = new THREE.SphereGeometry(0.04, 8, 8);
-const ledMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
-const led = new THREE.Mesh(ledGeo, ledMat);
-led.position.set(0, -0.05, 0.35);
-droneGroup.add(led);
-
-droneGroup.position.y = 0;
-scene.add(droneGroup);
-
-// Shadow line (altitude indicator)
-const shadowGeo = new THREE.RingGeometry(0.3, 0.35, 16);
-const shadowMat = new THREE.MeshBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.2, side: THREE.DoubleSide });
-const shadow = new THREE.Mesh(shadowGeo, shadowMat);
-shadow.rotation.x = -Math.PI/2;
-scene.add(shadow);
-
-// Altitude line
-const altLineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,1,0)]);
-const altLineMat = new THREE.LineDashedMaterial({ color: 0x44aaff, transparent: true, opacity: 0.3, dashSize: 0.2, gapSize: 0.1 });
-const altLine = new THREE.Line(altLineGeo, altLineMat);
-altLine.computeLineDistances();
-scene.add(altLine);
-
-// Trail
-const maxTrail = 500;
-const trailPoints = [];
-const trailGeo = new THREE.BufferGeometry();
-const trailMat = new THREE.LineBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.5 });
-const trailLine = new THREE.Line(trailGeo, trailMat);
-scene.add(trailLine);
-
-// State
 let homeLat = null, homeLon = null;
-let droneAlt = 0, armed = false;
+const droneObjs = {}; // drone_id → { group, rotors, shadow, altLine, trail, trailGeo, trailPts, armed }
 
 function gpsToLocal(lat, lon) {
-  if (!homeLat) return {x:0, z:0};
-  const dx = (lon - homeLon) * 111320 * Math.cos(homeLat * Math.PI/180);
-  const dz = -(lat - homeLat) * 110540;
-  return {x: dx, z: dz};
+  if (!homeLat) return { x: 0, z: 0 };
+  return {
+    x: (lon - homeLon) * 111320 * Math.cos(homeLat * Math.PI / 180),
+    z: -(lat - homeLat) * 110540
+  };
 }
 
-async function cmd(endpoint, body) {
-  try { await fetch(API + endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); } catch(e) {}
+function createDrone(id, idx) {
+  const color = COLORS[idx % COLORS.length];
+  const group = new THREE.Group();
+
+  // Body
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6, 0.15, 0.6),
+    new THREE.MeshStandardMaterial({ color: 0x333340, metalness: 0.7, roughness: 0.3 })
+  );
+  body.castShadow = true;
+  group.add(body);
+
+  // Arms + rotors
+  const armPos = [[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1]];
+  const rotors = [];
+  armPos.forEach(([x,,z]) => {
+    const arm = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.03, 0.03, 1.2),
+      new THREE.MeshStandardMaterial({ color: 0x444455 })
+    );
+    arm.rotation.z = Math.PI/2;
+    arm.position.set(x*0.4, 0, z*0.4);
+    arm.lookAt(x*0.8, 0, z*0.8);
+    group.add(arm);
+
+    const motor = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.08, 0.1, 8),
+      new THREE.MeshStandardMaterial({ color: 0x222233 })
+    );
+    motor.position.set(x*0.7, 0.08, z*0.7);
+    group.add(motor);
+
+    const rotor = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.35, 0.35, 0.02, 16),
+      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.2, transparent: true, opacity: 0.4 })
+    );
+    rotor.position.set(x*0.7, 0.15, z*0.7);
+    group.add(rotor);
+    rotors.push(rotor);
+  });
+
+  // LED
+  const led = new THREE.Mesh(
+    new THREE.SphereGeometry(0.04, 8, 8),
+    new THREE.MeshBasicMaterial({ color })
+  );
+  led.position.set(0, -0.05, 0.35);
+  group.add(led);
+
+  // Label
+  const labelCanvas = document.createElement('canvas');
+  labelCanvas.width = 128; labelCanvas.height = 32;
+  const ctx = labelCanvas.getContext('2d');
+  ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
+  ctx.font = 'bold 20px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(id, 64, 22);
+  const labelTex = new THREE.CanvasTexture(labelCanvas);
+  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTex, transparent: true }));
+  label.scale.set(2, 0.5, 1);
+  label.position.y = 0.8;
+  group.add(label);
+
+  scene.add(group);
+
+  // Shadow
+  const shadow = new THREE.Mesh(
+    new THREE.RingGeometry(0.3, 0.35, 16),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.2, side: THREE.DoubleSide })
+  );
+  shadow.rotation.x = -Math.PI/2;
+  scene.add(shadow);
+
+  // Alt line
+  const altLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0,1,0)]),
+    new THREE.LineDashedMaterial({ color, transparent: true, opacity: 0.3, dashSize: 0.2, gapSize: 0.1 })
+  );
+  altLine.computeLineDistances();
+  scene.add(altLine);
+
+  // Trail
+  const trailPts = [];
+  const trailGeo = new THREE.BufferGeometry();
+  const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.4 }));
+  scene.add(trail);
+
+  return { group, rotors, shadow, altLine, trail, trailGeo, trailPts, armed: false, alt: 0 };
 }
-window.cmd = cmd;
+
+async function swarmCmd(action, params) {
+  try { await fetch(API + '/api/swarm', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action, params }) }); } catch(e) {}
+}
+window.swarmCmd = swarmCmd;
 
 async function poll() {
   try {
-    const r = await fetch(API + '/tools/drone_query', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({drone_id:'drone_1'})
-    });
+    const r = await fetch(API + '/api/query', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({}) });
     const d = await r.json();
     if (d.status !== 'success') return;
-    const t = d.telemetry, p = t.position;
 
-    if (!homeLat) { homeLat = p.lat; homeLon = p.lon; }
+    const droneList = d.drones || [];
+    if (!homeLat && droneList.length) { homeLat = droneList[0].position.lat; homeLon = droneList[0].position.lon; }
 
-    const local = gpsToLocal(p.lat, p.lon);
-    droneAlt = Math.max(0, p.alt_rel_m);
-    armed = t.armed;
+    let hudHtml = '';
+    droneList.forEach((t, idx) => {
+      const id = t.drone_id;
+      const p = t.position;
+      if (!droneObjs[id]) droneObjs[id] = createDrone(id, idx);
+      const obj = droneObjs[id];
 
-    // Update drone position
-    droneGroup.position.set(local.x, droneAlt, local.z);
-    droneGroup.rotation.y = -(p.heading || 0) * Math.PI / 180;
+      const local = gpsToLocal(p.lat, p.lon);
+      const alt = Math.max(0, p.alt_rel_m || 0);
+      obj.alt = alt;
+      obj.armed = t.armed;
 
-    // Shadow + altitude line
-    shadow.position.set(local.x, 0.02, local.z);
-    shadow.scale.setScalar(1 + droneAlt * 0.1);
-    shadowMat.opacity = Math.max(0.05, 0.3 - droneAlt * 0.01);
+      obj.group.position.set(local.x, alt, local.z);
 
-    altLine.position.set(local.x, 0, local.z);
-    const pts = [new THREE.Vector3(0,0,0), new THREE.Vector3(0, droneAlt, 0)];
-    altLine.geometry.setFromPoints(pts);
-    altLine.computeLineDistances();
-    altLine.visible = droneAlt > 0.5;
+      obj.shadow.position.set(local.x, 0.02, local.z);
+      obj.shadow.scale.setScalar(1 + alt * 0.1);
 
-    // Trail
-    if (droneAlt > 0.3) {
-      trailPoints.push(new THREE.Vector3(local.x, droneAlt, local.z));
-      if (trailPoints.length > maxTrail) trailPoints.shift();
-      trailGeo.setFromPoints(trailPoints);
-    }
+      obj.altLine.position.set(local.x, 0, local.z);
+      obj.altLine.geometry.setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, alt, 0)]);
+      obj.altLine.computeLineDistances();
+      obj.altLine.visible = alt > 0.5;
 
-    // HUD
-    document.getElementById('alt').textContent = droneAlt.toFixed(1) + 'm';
-    document.getElementById('spd').textContent = t.speed.groundspeed_ms.toFixed(1) + ' m/s';
-    document.getElementById('bat').textContent = t.battery.percent + '%';
-    document.getElementById('gps').textContent = t.gps.satellites + ' sats';
-    document.getElementById('pos').textContent = p.lat.toFixed(6) + ', ' + p.lon.toFixed(6);
+      if (alt > 0.3) {
+        obj.trailPts.push(new THREE.Vector3(local.x, alt, local.z));
+        if (obj.trailPts.length > 300) obj.trailPts.shift();
+        obj.trailGeo.setFromPoints(obj.trailPts);
+      }
 
-    const armEl = document.getElementById('arm');
-    armEl.textContent = t.armed ? '● ARMED' : '○ DISARMED';
-    armEl.className = 'val ' + (t.armed ? 'armed' : 'disarmed');
-    document.getElementById('mode').textContent = t.flight_mode;
+      const gs = t.speed?.groundspeed_ms ?? (t.velocity ? Math.sqrt(t.velocity.north_ms**2 + t.velocity.east_ms**2) : 0);
+      const bat = t.battery?.percent ?? t.battery?.remaining_pct ?? 100;
+      const sats = t.gps?.satellites ?? 0;
+      const mode = t.flight_mode ?? t.current_task ?? 'idle';
+      const armStr = t.armed ? '<span class="armed-b">ARMED</span>' : '<span class="disarmed-b">DISARMED</span>';
 
+      hudHtml += `<div class="drone-hud"><div class="name" style="color:#${COLORS[idx%COLORS.length].toString(16).padStart(6,'0')}">${id}</div>
+        <div class="stat">${armStr} · <b>${mode}</b></div>
+        <div class="stat">Alt: <b>${alt.toFixed(1)}m</b> · Spd: <b>${gs.toFixed(1)}m/s</b></div>
+        <div class="stat">Bat: <b>${bat}%</b> · GPS: <b>${sats}</b></div></div>`;
+    });
+
+    document.getElementById('hud').innerHTML = hudHtml;
   } catch(e) {}
 }
 
 setInterval(poll, 400);
 poll();
 
-// Animate
 const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
   const t = clock.getElapsedTime();
 
-  // Spin rotors when armed
-  rotors.forEach((r, i) => {
-    r.rotation.y = armed ? t * 30 + i * Math.PI/2 : 0;
-    r.material.opacity = armed ? 0.15 + Math.sin(t*5)*0.05 : 0.4;
-  });
-
-  // Pulse ring
-  ring.scale.setScalar(1 + Math.sin(t*2)*0.1);
-  ringMat.opacity = 0.2 + Math.sin(t*2)*0.1;
-
-  // LED blink
-  ledMat.color.setHex(Math.sin(t*3) > 0 ? 0xff3333 : 0x331111);
-
-  // Gentle drone hover wobble when airborne
-  if (droneAlt > 0.5) {
-    droneGroup.position.y = droneAlt + Math.sin(t*1.5)*0.03;
-    droneGroup.rotation.z = Math.sin(t*0.8)*0.02;
-    droneGroup.rotation.x = Math.cos(t*0.6)*0.015;
+  for (const [, obj] of Object.entries(droneObjs)) {
+    obj.rotors.forEach((r, i) => {
+      r.rotation.y = obj.armed ? t * 30 + i * Math.PI/2 : 0;
+      r.material.opacity = obj.armed ? 0.15 + Math.sin(t*5)*0.05 : 0.4;
+    });
+    if (obj.alt > 0.5) {
+      obj.group.position.y = obj.alt + Math.sin(t*1.5 + Object.keys(droneObjs).indexOf(Object.keys(droneObjs).find(k => droneObjs[k]===obj)))*0.03;
+      obj.group.rotation.z = Math.sin(t*0.8)*0.02;
+      obj.group.rotation.x = Math.cos(t*0.6)*0.015;
+    }
   }
+
+  homeRing.scale.setScalar(1 + Math.sin(t*2)*0.1);
+  homeRing.material.opacity = 0.2 + Math.sin(t*2)*0.1;
 
   controls.update();
   renderer.render(scene, camera);

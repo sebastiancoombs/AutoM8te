@@ -494,6 +494,20 @@ def _get_current_positions_and_center(center_lat, center_lon):
     return drone_ids, current_positions, center_lat, center_lon
 
 
+def _formation_kwargs(name: str, spacing_m: float = 10.0, alt_m: float = 10.0, heading_deg: float = 0.0) -> dict:
+    """Map generic formation params to formation-specific kwargs."""
+    name_lower = name.lower()
+    if name_lower in ('circle', 'ring'):
+        kw = {'radius_m': spacing_m, 'alt_m': alt_m}
+    elif name_lower in ('stack', 'column'):
+        kw = {'vertical_spacing_m': spacing_m, 'base_alt_m': alt_m}
+    else:
+        kw = {'spacing_m': spacing_m, 'alt_m': alt_m}
+    if name_lower in ('line', 'v', 'vee'):
+        kw['heading_deg'] = heading_deg
+    return kw
+
+
 def _apply_transforms(matrix: SwarmMatrix, transforms: list[dict]) -> SwarmMatrix:
     """Apply a list of transform dicts to a SwarmMatrix in order."""
     for t in transforms:
@@ -552,12 +566,16 @@ async def drone_formation_transform(req: TransformFormationRequest):
 
     drone_count = req.drone_count or len(drone_ids)
 
-    # Build formation kwargs
-    form_kwargs = {"spacing_m": req.spacing_m, "alt_m": req.alt_m}
-    if req.formation.lower() in ("line", "v", "vee"):
-        form_kwargs["heading_deg"] = req.heading_deg
-    if req.formation.lower() in ("circle", "ring"):
+    # Build formation kwargs — map generic spacing_m to formation-specific params
+    form_lower = req.formation.lower()
+    if form_lower in ("circle", "ring"):
         form_kwargs = {"radius_m": req.spacing_m, "alt_m": req.alt_m}
+    elif form_lower in ("stack", "column"):
+        form_kwargs = {"vertical_spacing_m": req.spacing_m, "base_alt_m": req.alt_m}
+    else:
+        form_kwargs = {"spacing_m": req.spacing_m, "alt_m": req.alt_m}
+    if form_lower in ("line", "v", "vee"):
+        form_kwargs["heading_deg"] = req.heading_deg
 
     try:
         matrix = SwarmMatrix.from_formation(req.formation, drone_count, **form_kwargs)

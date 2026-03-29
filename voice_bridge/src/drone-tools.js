@@ -18,13 +18,15 @@ export const DRONE_TOOLS = [
   {
     type: 'function',
     name: 'drone_command',
-    description: 'Execute a single-drone command. Actions: takeoff, land, hover, set_yaw, change_speed, change_altitude, return_home, emergency_stop, pause, resume. Pass action-specific params (e.g. altitude_m for takeoff, heading_deg for set_yaw, speed_m_s for change_speed).',
+    description: 'Execute a single-drone command. Actions: takeoff, land, hover, set_yaw, change_speed, change_altitude, return_home, emergency_stop, pause, resume.',
     parameters: {
       type: 'object',
       properties: {
         drone_id: { type: 'string', description: 'Drone ID (e.g. drone_1). Default: drone_1' },
         action: { type: 'string', description: 'Command: takeoff, land, hover, set_yaw, change_speed, change_altitude, return_home, emergency_stop, pause, resume' },
-        params: { type: 'object', description: 'Action-specific params: {altitude_m, heading_deg, speed_m_s, alt_m}' },
+        altitude_m: { type: 'number', description: 'Target altitude in meters (for takeoff, change_altitude)' },
+        heading_deg: { type: 'number', description: 'Target heading in degrees (for set_yaw)' },
+        speed_m_s: { type: 'number', description: 'Target speed in m/s (for change_speed)' },
       },
       required: ['drone_id', 'action'],
     },
@@ -66,7 +68,7 @@ export const DRONE_TOOLS = [
       type: 'object',
       properties: {
         action: { type: 'string', description: 'Command to fan out: takeoff, land, return_home, hover, emergency_stop' },
-        params: { type: 'object', description: 'Command params (e.g. {altitude_m: 10} for takeoff)' },
+        altitude_m: { type: 'number', description: 'Altitude in meters (for takeoff)' },
         drone_ids: { type: 'array', items: { type: 'string' }, description: 'Target drone IDs. Omit for all.' },
       },
       required: ['action'],
@@ -177,11 +179,28 @@ export async function executeTool(toolName, args) {
   const url = `${BASE}${route.path}`;
   const startMs = Date.now();
 
+  // Re-nest flat params into the structure the swarm manager expects
+  let body = args;
+  if (toolName === 'drone_command') {
+    const { drone_id, action, altitude_m, heading_deg, speed_m_s, alt_m, ...rest } = args;
+    const params = {};
+    if (altitude_m !== undefined) params.altitude_m = altitude_m;
+    if (heading_deg !== undefined) params.heading_deg = heading_deg;
+    if (speed_m_s !== undefined) params.speed_m_s = speed_m_s;
+    if (alt_m !== undefined) params.alt_m = alt_m;
+    body = { drone_id, action, params: { ...params, ...rest } };
+  } else if (toolName === 'drone_swarm') {
+    const { action, drone_ids, altitude_m, ...rest } = args;
+    const params = {};
+    if (altitude_m !== undefined) params.altitude_m = altitude_m;
+    body = { action, drone_ids, params: { ...params, ...rest } };
+  }
+
   try {
     const fetchOpts = { method: route.method, headers: {} };
     if (route.method === 'POST') {
       fetchOpts.headers['Content-Type'] = 'application/json';
-      fetchOpts.body = JSON.stringify(args);
+      fetchOpts.body = JSON.stringify(body);
     }
 
     const resp = await fetch(url, fetchOpts);

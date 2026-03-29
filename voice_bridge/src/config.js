@@ -21,9 +21,9 @@ export const config = {
   },
   openai: {
     apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.REALTIME_MODEL || 'gpt-realtime',
+    model: process.env.REALTIME_MODEL || 'gpt-realtime-1.5',
     voice: process.env.REALTIME_VOICE || 'coral',
-    wsUrl: `wss://api.openai.com/v1/realtime?model=${process.env.REALTIME_MODEL || 'gpt-realtime'}`,
+    wsUrl: `wss://api.openai.com/v1/realtime?model=${process.env.REALTIME_MODEL || 'gpt-realtime-1.5'}`,
   },
   swarmManager: {
     url: process.env.SWARM_MANAGER_URL || 'http://localhost:8000',
