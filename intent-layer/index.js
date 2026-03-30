@@ -19,6 +19,7 @@ import {
   AXIS_TYPES,
   TIMING_TYPES,
 } from './lookups/modifiers.js';
+import { MockDetector } from './perception/detector.js';
 import { MockAdapter } from './adapters/mock.js';
 import { Aerostack2Adapter } from './adapters/aerostack2.js';
 import { PyBulletAdapter } from './adapters/pybullet.js';
@@ -28,6 +29,18 @@ import { PyBulletAdapter } from './adapters/pybullet.js';
 const BACKEND = process.env.AUTOM8TE_BACKEND || 'mock';
 const DRONE_COUNT = parseInt(process.env.AUTOM8TE_DRONES || '4', 10);
 const GUI = process.env.AUTOM8TE_GUI === 'true';
+const PERCEPTION = process.env.AUTOM8TE_PERCEPTION || 'mock';
+
+// --- Perception ---
+let detector;
+if (PERCEPTION === 'yolo') {
+  // Full YOLO detector (requires ultralytics)
+  const { ObjectDetector } = await import('./perception/detector.js');
+  detector = new ObjectDetector();
+} else {
+  // Mock detector for testing
+  detector = new MockDetector();
+}
 
 // --- Backend Selection ---
 
@@ -196,12 +209,34 @@ const tools = [
   },
   {
     name: 'follow',
-    description: '[Phase 3] Follow a tracked object. Requires perception system.',
+    description: 'Follow a tracked object using perception. Target can be class name (person, car, truck) or object ID.',
     inputSchema: {
       type: 'object',
       properties: {
-        drone_id: { type: 'string', description: 'Drone ID' },
-        target: { type: 'string', description: 'Target to follow (e.g., "person", "vehicle", object ID)' },
+        drone_id: { type: 'string', description: 'Drone ID (omit for lead drone)' },
+        target: { type: 'string', description: 'Target to follow (e.g., "person", "car", "truck", or object ID)' },
+        distance_m: { type: 'number', description: 'Follow distance in meters (default: 10)' },
+        formation: { type: 'string', description: 'Swarm formation while following (line, v, etc.)' },
+        modifier: { type: 'string', description: 'Movement modifier while following' },
+      },
+      required: ['target'],
+    },
+  },
+  {
+    name: 'detect',
+    description: 'List currently detected objects in view',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'locate',
+    description: 'Get the position of a specific object',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Object class or ID to locate' },
       },
       required: ['target'],
     },
@@ -324,13 +359,75 @@ async function executeTool(name, args) {
     }
 
     case 'follow': {
-      const position = await backend.getObjectPosition(args.target);
-      if (!position) {
-        return `Cannot locate target "${args.target}". Perception system may not be available.`;
+      // Get target position from perception
+      const targetInfo = detector.getObjectPosition(args.target);
+      if (!targetInfo) {
+        const objects = detector.getObjects();
+        const available = objects.length > 0 
+          ? `Available: ${objects.map(o => `${o.class} (${o.id})`).join(', ')}`
+          : 'No objects detected.';
+        return `Cannot locate "${args.target}". ${available}`;
       }
-      const id = args.drone_id || [...(await backend.getDroneStates()).keys()][0];
-      await backend.followObject(id, args.target);
-      return `${id} following ${args.target}`;
+
+      const followDistance = args.distance_m || 10;
+      const targetPos = targetInfo.position;
+      
+      // Calculate follow position (behind target)
+      const prediction = detector.predictPosition(args.target, 0.5) || targetInfo;
+      const velocity = prediction.velocity || [0, 0, 0];
+      
+      // Follow point is behind target in direction of travel
+      const speed = Math.sqrt(velocity[0]**2 + velocity[1]**2) || 0.01;
+      const followPos = [
+        targetPos[0] - (velocity[0] / speed) * followDistance,
+        targetPos[1] - (velocity[1] / speed) * followDistance,
+        targetPos[2] + 5, // Stay above target
+      ];
+
+      // If swarm formation specified, set it up
+      if (args.formation) {
+        const count = await backend.getDroneCount();
+        const spacing = 5;
+        let offsets = resolveFormation(args.formation, count, spacing);
+        if (args.modifier) {
+          offsets = applyModifierToFormation(args.modifier, offsets, 0);
+        }
+        await backend.setFormation(offsets);
+      }
+
+      // Move swarm to follow position
+      const droneIds = args.drone_id 
+        ? [args.drone_id]
+        : [...(await backend.getDroneStates()).keys()];
+      
+      // Fire-and-forget continuous follow (would be a loop in real implementation)
+      Promise.all(droneIds.map(id => 
+        backend.goTo(id, followPos[0], followPos[1], followPos[2], resolveSpeed('normal'), 'earth')
+      )).catch(err => console.error('[follow] Error:', err));
+
+      const formationNote = args.formation ? ` in ${args.formation} formation` : '';
+      return `Following ${args.target}${formationNote} at ${followDistance}m`;
+    }
+
+    case 'detect': {
+      const objects = detector.getObjects();
+      if (objects.length === 0) {
+        return 'No objects detected.';
+      }
+      const lines = objects.map(obj => 
+        `${obj.id}: ${obj.class} at [${obj.position.map(p => p.toFixed(1)).join(', ')}] (${(obj.confidence * 100).toFixed(0)}%)`
+      );
+      return `Detected objects:\n${lines.join('\n')}`;
+    }
+
+    case 'locate': {
+      const info = detector.getObjectPosition(args.target);
+      if (!info) {
+        return `Cannot locate "${args.target}"`;
+      }
+      const obj = detector.findObject(args.target);
+      const pos = info.position.map(p => p.toFixed(1)).join(', ');
+      return `${obj.class} (${obj.id}) at [${pos}], confidence ${(info.confidence * 100).toFixed(0)}%`;
     }
 
     case 'status': {
@@ -360,6 +457,7 @@ async function handleMessage(message) {
     switch (method) {
       case 'initialize':
         await backend.connect();
+        await detector.start();
         return {
           id,
           result: {
