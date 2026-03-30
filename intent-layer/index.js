@@ -24,6 +24,7 @@ import { GroupManager } from './state/groups.js';
 import { MockAdapter } from './adapters/mock.js';
 import { Aerostack2Adapter } from './adapters/aerostack2.js';
 import { PyBulletAdapter } from './adapters/pybullet.js';
+import { ArduPilotAdapter } from './adapters/ardupilot.js';
 
 // --- Configuration ---
 
@@ -47,6 +48,9 @@ if (PERCEPTION === 'yolo') {
 
 let backend;
 switch (BACKEND) {
+  case 'ardupilot':
+    backend = new ArduPilotAdapter({ droneCount: DRONE_COUNT });
+    break;
   case 'aerostack2':
     backend = new Aerostack2Adapter({ droneCount: DRONE_COUNT });
     break;
