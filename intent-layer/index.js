@@ -10,6 +10,15 @@ import { createInterface } from 'readline';
 import { resolveDirection, resolveSpeed, scaleVector } from './lookups/directions.js';
 import { resolveFormation } from './lookups/formations.js';
 import { resolvePattern } from './lookups/patterns.js';
+import { 
+  defineModifier, 
+  getModifier, 
+  listModifiers, 
+  applyModifierToFormation,
+  PATTERN_TYPES,
+  AXIS_TYPES,
+  TIMING_TYPES,
+} from './lookups/modifiers.js';
 import { MockAdapter } from './adapters/mock.js';
 import { Aerostack2Adapter } from './adapters/aerostack2.js';
 import { PyBulletAdapter } from './adapters/pybullet.js';
@@ -111,7 +120,7 @@ const tools = [
   },
   {
     name: 'form',
-    description: 'Arrange swarm into a formation',
+    description: 'Arrange swarm into a formation, optionally with a movement modifier',
     inputSchema: {
       type: 'object',
       properties: {
@@ -121,8 +130,49 @@ const tools = [
           description: 'Formation shape',
         },
         spacing_m: { type: 'number', description: 'Spacing between drones in meters (default: 5)' },
+        modifier: { 
+          type: 'string', 
+          description: 'Movement modifier to apply (e.g., snake, wave, pulse, breathe, orbit, weave)' 
+        },
       },
       required: ['shape'],
+    },
+  },
+  {
+    name: 'define_modifier',
+    description: 'Create a new movement modifier using building blocks. The modifier can then be used with form() or follow().',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Name for this modifier' },
+        pattern: {
+          type: 'string',
+          enum: ['sinusoidal', 'linear', 'circular', 'pulse', 'sawtooth', 'triangle', 'random'],
+          description: 'Base movement pattern',
+        },
+        axis: {
+          type: 'string',
+          enum: ['lateral', 'vertical', 'forward', 'all'],
+          description: 'Which axis the movement applies to',
+        },
+        amplitude_m: { type: 'number', description: 'Movement amplitude in meters (default: 1)' },
+        frequency_hz: { type: 'number', description: 'Oscillation frequency in Hz (default: 0.5)' },
+        timing: {
+          type: 'string',
+          enum: ['sync', 'staggered', 'reverse_stagger', 'center_out', 'random', 'sequential'],
+          description: 'How drones are timed relative to each other',
+        },
+        phase_offset: { type: 'number', description: 'Phase offset between drones for staggered timing (default: 0.5)' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'list_modifiers',
+    description: 'List all available movement modifiers',
+    inputSchema: {
+      type: 'object',
+      properties: {},
     },
   },
   {
@@ -222,9 +272,32 @@ async function executeTool(name, args) {
     case 'form': {
       const count = await backend.getDroneCount();
       const spacing = args.spacing_m || 5;
-      const offsets = resolveFormation(args.shape, count, spacing);
+      let offsets = resolveFormation(args.shape, count, spacing);
+      
+      // Apply modifier if specified
+      if (args.modifier) {
+        const mod = getModifier(args.modifier);
+        if (!mod) {
+          return `Unknown modifier: ${args.modifier}. Use list_modifiers to see available options.`;
+        }
+        // Apply at t=0 for initial formation, continuous updates happen in backend
+        offsets = applyModifierToFormation(args.modifier, offsets, 0);
+      }
+      
       await backend.setFormation(offsets);
-      return `Swarm forming ${args.shape} with ${spacing}m spacing`;
+      
+      const modifierNote = args.modifier ? ` with ${args.modifier} modifier` : '';
+      return `Swarm forming ${args.shape}${modifierNote} with ${spacing}m spacing`;
+    }
+
+    case 'define_modifier': {
+      const modifier = defineModifier(args);
+      return `Modifier "${modifier.name}" defined: ${modifier.pattern} on ${modifier.axis} axis, ${modifier.amplitude_m}m amplitude, ${modifier.frequency_hz}Hz, ${modifier.timing} timing`;
+    }
+
+    case 'list_modifiers': {
+      const mods = listModifiers();
+      return `Available modifiers: ${mods.join(', ')}`;
     }
 
     case 'search': {
