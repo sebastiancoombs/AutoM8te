@@ -20,6 +20,7 @@ import {
   TIMING_TYPES,
 } from './lookups/modifiers.js';
 import { MockDetector } from './perception/detector.js';
+import { GroupManager } from './state/groups.js';
 import { MockAdapter } from './adapters/mock.js';
 import { Aerostack2Adapter } from './adapters/aerostack2.js';
 import { PyBulletAdapter } from './adapters/pybullet.js';
@@ -57,6 +58,9 @@ switch (BACKEND) {
     backend = new MockAdapter(DRONE_COUNT);
 }
 
+// --- Group Manager ---
+const groups = new GroupManager();
+
 // --- MCP Protocol Handlers ---
 
 const tools = [
@@ -67,6 +71,7 @@ const tools = [
       type: 'object',
       properties: {
         drone_id: { type: 'string', description: 'Drone ID (omit for all)' },
+        group: { type: 'string', description: 'Group name to command (e.g., "alpha")' },
         altitude_m: { type: 'number', description: 'Target altitude in meters (default: 5)' },
         speed: { type: 'string', description: 'Speed preset: slow, normal, fast (default: normal)' },
       },
@@ -79,6 +84,7 @@ const tools = [
       type: 'object',
       properties: {
         drone_id: { type: 'string', description: 'Drone ID (omit for all)' },
+        group: { type: 'string', description: 'Group name to command' },
         speed: { type: 'string', description: 'Speed preset: slow, normal (default: slow)' },
       },
     },
@@ -90,6 +96,7 @@ const tools = [
       type: 'object',
       properties: {
         drone_id: { type: 'string', description: 'Drone ID (omit for all)' },
+        group: { type: 'string', description: 'Group name to command (e.g., "alpha")' },
         direction: { 
           type: 'string', 
           enum: ['forward', 'back', 'backward', 'left', 'right', 'up', 'down', 'north', 'south', 'east', 'west'],
@@ -137,6 +144,7 @@ const tools = [
     inputSchema: {
       type: 'object',
       properties: {
+        group: { type: 'string', description: 'Group to form (omit for all active drones)' },
         shape: {
           type: 'string',
           enum: ['line', 'v', 'circle', 'ring', 'square', 'grid', 'column', 'file', 'echelon'],
@@ -214,6 +222,7 @@ const tools = [
       type: 'object',
       properties: {
         drone_id: { type: 'string', description: 'Drone ID (omit for lead drone)' },
+        group: { type: 'string', description: 'Group to follow with (omit for all active)' },
         target: { type: 'string', description: 'Target to follow (e.g., "person", "car", "truck", or object ID)' },
         distance_m: { type: 'number', description: 'Follow distance in meters (default: 10)' },
         formation: { type: 'string', description: 'Swarm formation while following (line, v, etc.)' },
@@ -246,6 +255,45 @@ const tools = [
     description: 'Get human-readable swarm status summary',
     inputSchema: {
       type: 'object',
+      properties: {
+        group: { type: 'string', description: 'Specific group to query' },
+        drone_id: { type: 'string', description: 'Specific drone to query' },
+      },
+    },
+  },
+  // --- Group Management ---
+  {
+    name: 'assign',
+    description: 'Assign drones to a named group. Creates group if it doesn\'t exist.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        drones: { 
+          type: 'array', 
+          items: { type: 'string' },
+          description: 'Drone IDs to assign (e.g., ["drone0", "drone1"])' 
+        },
+        group: { type: 'string', description: 'Group name (e.g., "alpha", "bravo")' },
+      },
+      required: ['drones', 'group'],
+    },
+  },
+  {
+    name: 'disband',
+    description: 'Disband a group - all drones return to idle pool',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        group: { type: 'string', description: 'Group name to disband' },
+      },
+      required: ['group'],
+    },
+  },
+  {
+    name: 'groups',
+    description: 'List all active groups and their status',
+    inputSchema: {
+      type: 'object',
       properties: {},
     },
   },
@@ -253,24 +301,115 @@ const tools = [
 
 // --- Tool Execution ---
 
+/**
+ * Resolve target drones from args (drone_id, group, or all)
+ */
+function resolveTargetDrones(args, allDroneIds) {
+  if (args.drone_id) {
+    return [args.drone_id];
+  }
+  if (args.group) {
+    return groups.getDronesInGroup(args.group);
+  }
+  return allDroneIds;
+}
+
+/**
+ * Get context to append to tool results
+ */
+async function getContext() {
+  const positions = new Map();
+  const states = await backend.getDroneStates();
+  for (const [id, state] of states) {
+    positions.set(id, state.position);
+  }
+  
+  // Get detected objects with relative positions
+  const objects = detector.getObjects();
+  const swarmCenter = await backend.getSwarmCenter?.() || [0, 0, 0];
+  
+  const detectedWithRelative = objects.map(obj => {
+    const dx = obj.position[0] - swarmCenter[0];
+    const dy = obj.position[1] - swarmCenter[1];
+    const distance_m = Math.sqrt(dx * dx + dy * dy);
+    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+    
+    // Convert angle to direction
+    let direction;
+    if (angle >= -22.5 && angle < 22.5) direction = 'east';
+    else if (angle >= 22.5 && angle < 67.5) direction = 'northeast';
+    else if (angle >= 67.5 && angle < 112.5) direction = 'north';
+    else if (angle >= 112.5 && angle < 157.5) direction = 'northwest';
+    else if (angle >= 157.5 || angle < -157.5) direction = 'west';
+    else if (angle >= -157.5 && angle < -112.5) direction = 'southwest';
+    else if (angle >= -112.5 && angle < -67.5) direction = 'south';
+    else direction = 'southeast';
+    
+    // Estimate velocity if trajectory available
+    let velocity = null;
+    let speed = null;
+    if (obj.trajectory && obj.trajectory.length >= 2) {
+      const recent = obj.trajectory.slice(-5);
+      const first = recent[0];
+      const last = recent[recent.length - 1];
+      const dt = (recent.length - 1) * 0.1;
+      velocity = [
+        (last[0] - first[0]) / dt,
+        (last[1] - first[1]) / dt,
+        (last[2] - first[2]) / dt,
+      ];
+      speed = Math.sqrt(velocity[0]**2 + velocity[1]**2 + velocity[2]**2);
+    }
+    
+    return {
+      ...obj,
+      distance_m,
+      direction,
+      velocity,
+      speed,
+    };
+  });
+  
+  return groups.getContextString(positions, detectedWithRelative);
+}
+
+/**
+ * Wrap result with context
+ */
+async function withContext(result) {
+  const context = await getContext();
+  return `${result}\n\n---\n${context}`;
+}
+
 async function executeTool(name, args) {
-  const droneIds = args.drone_id 
-    ? [args.drone_id]
-    : [...(await backend.getDroneStates()).keys()];
+  const allDroneIds = [...(await backend.getDroneStates()).keys()];
+  const droneIds = resolveTargetDrones(args, allDroneIds);
 
   switch (name) {
     case 'takeoff': {
       const altitude = args.altitude_m || 5;
       const speed = resolveSpeed(args.speed || 'normal');
-      // Parallel: fire all, wait for all
       await Promise.all(droneIds.map(id => backend.takeoff(id, altitude, speed)));
-      return `${droneIds.length} drone(s) taking off to ${altitude}m`;
+      
+      // Update group task
+      if (args.group) {
+        groups.setGroupTask(args.group, { type: 'taking off', altitude_m: altitude });
+      }
+      
+      const target = args.group || (args.drone_id ? args.drone_id : 'all');
+      return withContext(`${target}: ${droneIds.length} drone(s) taking off to ${altitude}m`);
     }
 
     case 'land': {
       const speed = resolveSpeed(args.speed || 'slow');
       await Promise.all(droneIds.map(id => backend.land(id, speed)));
-      return `${droneIds.length} drone(s) landing`;
+      
+      if (args.group) {
+        groups.setGroupTask(args.group, { type: 'landing' });
+      }
+      
+      const target = args.group || (args.drone_id ? args.drone_id : 'all');
+      return withContext(`${target}: ${droneIds.length} drone(s) landing`);
     }
 
     case 'move': {
@@ -278,34 +417,53 @@ async function executeTool(name, args) {
       const scaled = scaleVector(vector, args.distance_m);
       const speed = resolveSpeed(args.speed || 'normal');
       
-      // Fire-and-forget: drones move, tool returns immediately
-      // Use stop() to interrupt
       Promise.all(droneIds.map(id => 
         backend.goTo(id, scaled[0], scaled[1], scaled[2], speed, frame)
       )).catch(err => console.error('[move] Error:', err));
       
-      return `${droneIds.length} drone(s) moving ${args.direction} ${args.distance_m}m`;
+      // Update task
+      if (args.group) {
+        groups.setGroupTask(args.group, { 
+          type: 'moving', 
+          direction: args.direction, 
+          distance_m: args.distance_m 
+        });
+      }
+      
+      const target = args.group || (args.drone_id ? args.drone_id : 'all');
+      return withContext(`${target}: ${droneIds.length} drone(s) moving ${args.direction} ${args.distance_m}m`);
     }
 
     case 'stop': {
       await Promise.all(droneIds.map(id => backend.hover(id)));
-      return droneIds.length === 1 
-        ? `${droneIds[0]} stopped`
-        : `${droneIds.length} drone(s) stopped`;
+      
+      if (args.group) {
+        groups.setGroupTask(args.group, { type: 'hovering' });
+      }
+      
+      const target = args.group || (args.drone_id ? args.drone_id : 'all');
+      return withContext(`${target}: stopped`);
     }
 
     case 'rtl': {
       await Promise.all(droneIds.map(id => backend.rtl(id)));
-      return `${droneIds.length} drone(s) returning to launch`;
+      
+      if (args.group) {
+        groups.setGroupTask(args.group, { type: 'returning' });
+      }
+      
+      const target = args.group || (args.drone_id ? args.drone_id : 'all');
+      return withContext(`${target}: returning to launch`);
     }
 
     case 'emergency': {
       await backend.emergency(args.drone_id);
-      return `EMERGENCY STOP executed`;
+      return withContext(`EMERGENCY STOP executed`);
     }
 
     case 'form': {
-      const count = await backend.getDroneCount();
+      const targetDrones = resolveTargetDrones(args, allDroneIds);
+      const count = targetDrones.length;
       const spacing = args.spacing_m || 5;
       let offsets = resolveFormation(args.shape, count, spacing);
       
@@ -315,14 +473,20 @@ async function executeTool(name, args) {
         if (!mod) {
           return `Unknown modifier: ${args.modifier}. Use list_modifiers to see available options.`;
         }
-        // Apply at t=0 for initial formation, continuous updates happen in backend
         offsets = applyModifierToFormation(args.modifier, offsets, 0);
       }
       
-      await backend.setFormation(offsets);
+      await backend.setFormation(offsets, targetDrones);
+      
+      // Update group formation
+      if (args.group) {
+        groups.setGroupFormation(args.group, args.shape, spacing);
+        groups.setGroupTask(args.group, { type: 'forming', shape: args.shape });
+      }
       
       const modifierNote = args.modifier ? ` with ${args.modifier} modifier` : '';
-      return `Swarm forming ${args.shape}${modifierNote} with ${spacing}m spacing`;
+      const target = args.group || 'Swarm';
+      return withContext(`${target} forming ${args.shape}${modifierNote} with ${spacing}m spacing`);
     }
 
     case 'define_modifier': {
@@ -343,19 +507,29 @@ async function executeTool(name, args) {
         altitude: args.altitude_m,
       });
       
-      // Distribute waypoints across drones
-      const states = await backend.getDroneStates();
-      const ids = [...states.keys()];
-      const waypointsPerDrone = Math.ceil(waypoints.length / ids.length);
+      // Use targeted drones
+      const targetDrones = resolveTargetDrones(args, allDroneIds);
+      const waypointsPerDrone = Math.ceil(waypoints.length / targetDrones.length);
       
-      for (let i = 0; i < ids.length; i++) {
+      for (let i = 0; i < targetDrones.length; i++) {
         const start = i * waypointsPerDrone;
         const droneWaypoints = waypoints.slice(start, start + waypointsPerDrone);
         if (droneWaypoints.length > 0) {
-          await backend.followPath(ids[i], droneWaypoints, resolveSpeed('normal'));
+          await backend.followPath(targetDrones[i], droneWaypoints, resolveSpeed('normal'));
         }
       }
-      return `${args.pattern} search started, ${waypoints.length} waypoints across ${ids.length} drones`;
+      
+      // Update group task
+      if (args.group) {
+        groups.setGroupTask(args.group, { 
+          type: 'searching', 
+          pattern: args.pattern,
+          progress: 0 
+        });
+      }
+      
+      const target = args.group || 'Swarm';
+      return withContext(`${target}: ${args.pattern} search started, ${waypoints.length} waypoints across ${targetDrones.length} drones`);
     }
 
     case 'follow': {
@@ -384,35 +558,43 @@ async function executeTool(name, args) {
         targetPos[2] + 5, // Stay above target
       ];
 
+      // Use targeted drones
+      const targetDrones = resolveTargetDrones(args, allDroneIds);
+
       // If swarm formation specified, set it up
       if (args.formation) {
-        const count = await backend.getDroneCount();
+        const count = targetDrones.length;
         const spacing = 5;
         let offsets = resolveFormation(args.formation, count, spacing);
         if (args.modifier) {
           offsets = applyModifierToFormation(args.modifier, offsets, 0);
         }
-        await backend.setFormation(offsets);
+        await backend.setFormation(offsets, targetDrones);
+        
+        if (args.group) {
+          groups.setGroupFormation(args.group, args.formation, spacing);
+        }
       }
-
-      // Move swarm to follow position
-      const droneIds = args.drone_id 
-        ? [args.drone_id]
-        : [...(await backend.getDroneStates()).keys()];
       
-      // Fire-and-forget continuous follow (would be a loop in real implementation)
-      Promise.all(droneIds.map(id => 
+      // Fire-and-forget continuous follow
+      Promise.all(targetDrones.map(id => 
         backend.goTo(id, followPos[0], followPos[1], followPos[2], resolveSpeed('normal'), 'earth')
       )).catch(err => console.error('[follow] Error:', err));
 
+      // Update group task
+      if (args.group) {
+        groups.setGroupTask(args.group, { type: 'following', target: args.target });
+      }
+
       const formationNote = args.formation ? ` in ${args.formation} formation` : '';
-      return `Following ${args.target}${formationNote} at ${followDistance}m`;
+      const groupNote = args.group ? `${args.group}: ` : '';
+      return withContext(`${groupNote}Following ${args.target}${formationNote} at ${followDistance}m`);
     }
 
     case 'detect': {
       const objects = detector.getObjects();
       if (objects.length === 0) {
-        return 'No objects detected.';
+        return withContext('No objects detected.');
       }
       const lines = objects.map(obj => 
         `${obj.id}: ${obj.class} at [${obj.position.map(p => p.toFixed(1)).join(', ')}] (${(obj.confidence * 100).toFixed(0)}%)`
@@ -427,20 +609,35 @@ async function executeTool(name, args) {
       }
       const obj = detector.findObject(args.target);
       const pos = info.position.map(p => p.toFixed(1)).join(', ');
-      return `${obj.class} (${obj.id}) at [${pos}], confidence ${(info.confidence * 100).toFixed(0)}%`;
+      return withContext(`${obj.class} (${obj.id}) at [${pos}], confidence ${(info.confidence * 100).toFixed(0)}%`);
     }
 
     case 'status': {
-      const state = await backend.getSwarmState();
-      const lines = [];
-      lines.push(`Swarm: ${state.count} drones, formation: ${state.formation}`);
-      lines.push(`Centroid: [${state.centroid.map(v => v.toFixed(1)).join(', ')}]`);
-      
-      for (const [id, drone] of state.drones) {
-        const pos = drone.position.map(v => v.toFixed(1)).join(', ');
-        lines.push(`  ${id}: [${pos}] ${drone.status} battery:${drone.battery}%`);
+      // Full context is the status
+      return getContext();
+    }
+
+    // --- Group Management ---
+    
+    case 'assign': {
+      const group = groups.assign(args.drones, args.group);
+      return withContext(`Assigned ${args.drones.length} drones to group "${args.group}" (now ${group.drones.size} total)`);
+    }
+
+    case 'disband': {
+      const droneIds = groups.disband(args.group);
+      if (!droneIds || droneIds.length === 0) {
+        return `Group "${args.group}" not found or empty`;
       }
-      return lines.join('\n');
+      return withContext(`Disbanded group "${args.group}", ${droneIds.length} drones returned to idle`);
+    }
+
+    case 'groups': {
+      const groupList = groups.listGroups();
+      if (groupList.length === 0) {
+        return 'No active groups';
+      }
+      return getContext();
     }
 
     default:
@@ -458,6 +655,9 @@ async function handleMessage(message) {
       case 'initialize':
         await backend.connect();
         await detector.start();
+        // Initialize groups with drone IDs
+        const droneIds = [...(await backend.getDroneStates()).keys()];
+        groups.initialize(droneIds);
         return {
           id,
           result: {
