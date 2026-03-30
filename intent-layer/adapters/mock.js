@@ -33,7 +33,7 @@ export class MockAdapter extends SwarmBackend {
         heading: 0,
         armed: false,
         offboard: false,
-        battery: 100 - i * 5,
+        battery: 100, // Real backends handle battery/RTL
         status: 'idle',
       });
     }
