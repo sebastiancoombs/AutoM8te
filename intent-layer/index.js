@@ -25,7 +25,6 @@ import { MockAdapter } from './adapters/mock.js';
 import { Aerostack2Adapter } from './adapters/aerostack2.js';
 import { PyBulletAdapter } from './adapters/pybullet.js';
 import { ArduPilotAdapter } from './adapters/ardupilot.js';
-import { WebotsAdapter } from './adapters/webots.js';
 
 // --- Configuration ---
 
@@ -33,6 +32,7 @@ const BACKEND = process.env.AUTOM8TE_BACKEND || 'mock';
 const DRONE_COUNT = parseInt(process.env.AUTOM8TE_DRONES || '4', 10);
 const GUI = process.env.AUTOM8TE_GUI === 'true';
 const PERCEPTION = process.env.AUTOM8TE_PERCEPTION || 'mock';
+const ARDUPILOT_PATH = process.env.ARDUPILOT_PATH || null; // For webots: path to ardupilot repo
 
 // --- Perception ---
 let detector;
@@ -50,9 +50,16 @@ if (PERCEPTION === 'yolo') {
 let backend;
 switch (BACKEND) {
   case 'webots':
-    backend = new WebotsAdapter({ droneCount: DRONE_COUNT });
+    // Webots via ArduPilot's native integration (--model webots-python)
+    // Requires: Webots running with iris.wbt, ARDUPILOT_PATH set
+    backend = new ArduPilotAdapter({ 
+      droneCount: DRONE_COUNT, 
+      backend: 'webots',
+      ardupilotPath: ARDUPILOT_PATH,
+    });
     break;
   case 'ardupilot':
+    // ArduPilot SITL (no viz)
     backend = new ArduPilotAdapter({ droneCount: DRONE_COUNT });
     break;
   case 'aerostack2':

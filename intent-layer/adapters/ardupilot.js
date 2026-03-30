@@ -2,14 +2,19 @@
  * ArduPilot SITL Adapter
  * 
  * Connects to ArduPilot SITL instances via pymavlink.
- * Each drone runs on a separate port (14550, 14560, 14570, ...)
+ * Supports multiple simulation backends via --model flag:
  * 
- * Start SITL instances:
- *   sim_vehicle.py -v ArduCopter --instance 0 -I0
- *   sim_vehicle.py -v ArduCopter --instance 1 -I1
- *   ...
+ *   - Default (no viz):   sim_vehicle.py -v ArduCopter --instance N
+ *   - Webots (physics):   sim_vehicle.py -v ArduCopter --model webots-python
+ *   - Gazebo:             sim_vehicle.py -v ArduCopter --model gazebo
  * 
- * Or use start-sitl.sh script for multiple drones.
+ * Webots Integration:
+ *   ArduPilot has native Webots support. When backend='webots':
+ *   1. Start Webots with iris.wbt from ardupilot/libraries/SITL/examples/Webots_Python/worlds/
+ *   2. This adapter launches SITL with --model webots-python
+ *   3. ArduPilot handles all communication with Webots
+ * 
+ * See: https://ardupilot.org/dev/docs/sitl-with-webots-python.html
  */
 
 import { spawn } from 'child_process';
@@ -23,11 +28,40 @@ export class ArduPilotAdapter {
     this.droneCount = options.droneCount || 4;
     this.basePort = options.basePort || 14550;
     this.portStep = options.portStep || 10;
+    this.backend = options.backend || 'default'; // 'default', 'webots', 'gazebo'
+    this.ardupilotPath = options.ardupilotPath || null; // Path to ardupilot repo (required for webots)
     this.process = null;
     this.drones = new Map();
     this.connected = false;
     this.formation = 'none';
     this.formationOffsets = [];
+  }
+
+  /**
+   * Get sim_vehicle.py arguments for the configured backend
+   */
+  _getSimVehicleArgs() {
+    const args = ['-v', 'ArduCopter', '-w'];
+    
+    switch (this.backend) {
+      case 'webots':
+        // Native ArduPilot Webots integration
+        args.push('--model', 'webots-python');
+        if (this.ardupilotPath) {
+          args.push(
+            `--add-param-file=${this.ardupilotPath}/libraries/SITL/examples/Webots_Python/params/iris.parm`
+          );
+        }
+        break;
+      case 'gazebo':
+        args.push('--model', 'gazebo');
+        break;
+      default:
+        // Default SITL (no external viz)
+        break;
+    }
+    
+    return args;
   }
 
   /**
