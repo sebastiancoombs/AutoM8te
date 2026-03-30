@@ -315,18 +315,25 @@ function resolveTargetDrones(args, allDroneIds) {
 }
 
 /**
- * Get context to append to tool results
+ * Get rich structured context for LLM
  */
-async function getContext() {
+async function getRichContext() {
   const positions = new Map();
   const states = await backend.getDroneStates();
   for (const [id, state] of states) {
     positions.set(id, state.position);
   }
   
+  // Get swarm center
+  const allPositions = [...positions.values()];
+  const swarmCenter = allPositions.length > 0 ? [
+    allPositions.reduce((s, p) => s + p[0], 0) / allPositions.length,
+    allPositions.reduce((s, p) => s + p[1], 0) / allPositions.length,
+    allPositions.reduce((s, p) => s + p[2], 0) / allPositions.length,
+  ] : [0, 0, 0];
+  
   // Get detected objects with relative positions
   const objects = detector.getObjects();
-  const swarmCenter = await backend.getSwarmCenter?.() || [0, 0, 0];
   
   const detectedWithRelative = objects.map(obj => {
     const dx = obj.position[0] - swarmCenter[0];
@@ -336,18 +343,19 @@ async function getContext() {
     
     // Convert angle to direction
     let direction;
-    if (angle >= -22.5 && angle < 22.5) direction = 'east';
-    else if (angle >= 22.5 && angle < 67.5) direction = 'northeast';
-    else if (angle >= 67.5 && angle < 112.5) direction = 'north';
-    else if (angle >= 112.5 && angle < 157.5) direction = 'northwest';
-    else if (angle >= 157.5 || angle < -157.5) direction = 'west';
-    else if (angle >= -157.5 && angle < -112.5) direction = 'southwest';
-    else if (angle >= -112.5 && angle < -67.5) direction = 'south';
-    else direction = 'southeast';
+    if (angle >= -22.5 && angle < 22.5) direction = 'ahead';
+    else if (angle >= 22.5 && angle < 67.5) direction = 'ahead-right';
+    else if (angle >= 67.5 && angle < 112.5) direction = 'right';
+    else if (angle >= 112.5 && angle < 157.5) direction = 'behind-right';
+    else if (angle >= 157.5 || angle < -157.5) direction = 'behind';
+    else if (angle >= -157.5 && angle < -112.5) direction = 'behind-left';
+    else if (angle >= -112.5 && angle < -67.5) direction = 'left';
+    else direction = 'ahead-left';
     
     // Estimate velocity if trajectory available
     let velocity = null;
-    let speed = null;
+    let speed_mps = null;
+    let heading = null;
     if (obj.trajectory && obj.trajectory.length >= 2) {
       const recent = obj.trajectory.slice(-5);
       const first = recent[0];
@@ -358,27 +366,142 @@ async function getContext() {
         (last[1] - first[1]) / dt,
         (last[2] - first[2]) / dt,
       ];
-      speed = Math.sqrt(velocity[0]**2 + velocity[1]**2 + velocity[2]**2);
+      speed_mps = Math.sqrt(velocity[0]**2 + velocity[1]**2 + velocity[2]**2);
+      heading = Math.atan2(velocity[1], velocity[0]) * 180 / Math.PI;
     }
     
     return {
-      ...obj,
-      distance_m,
-      direction,
-      velocity,
-      speed,
+      id: obj.id,
+      class: obj.class,
+      confidence: Math.round(obj.confidence * 100),
+      position: obj.position.map(p => Math.round(p * 10) / 10),
+      relative: {
+        distance_m: Math.round(distance_m * 10) / 10,
+        direction,
+        angle_deg: Math.round(angle),
+      },
+      motion: speed_mps ? {
+        speed_mps: Math.round(speed_mps * 10) / 10,
+        heading_deg: Math.round(heading),
+        velocity: velocity.map(v => Math.round(v * 10) / 10),
+      } : null,
     };
   });
-  
-  return groups.getContextString(positions, detectedWithRelative);
+
+  // Build group summaries
+  const groupSummaries = {};
+  for (const [name, group] of groups.groups) {
+    if (group.drones.size === 0) continue;
+    
+    const droneStates = {};
+    let groupCenter = [0, 0, 0];
+    let count = 0;
+    
+    for (const droneId of group.drones) {
+      const state = states.get(droneId);
+      if (state) {
+        droneStates[droneId] = {
+          position: state.position.map(p => Math.round(p * 10) / 10),
+          status: state.status,
+          battery: state.battery,
+          heading_deg: state.heading ? Math.round(state.heading * 180 / Math.PI) : 0,
+        };
+        groupCenter[0] += state.position[0];
+        groupCenter[1] += state.position[1];
+        groupCenter[2] += state.position[2];
+        count++;
+      }
+    }
+    
+    if (count > 0) {
+      groupCenter = groupCenter.map(v => Math.round((v / count) * 10) / 10);
+    }
+    
+    groupSummaries[name] = {
+      count: group.drones.size,
+      formation: group.formation,
+      spacing_m: group.spacing,
+      task: group.task,
+      center: groupCenter,
+      drones: droneStates,
+    };
+  }
+
+  return {
+    timestamp: Date.now(),
+    swarm: {
+      total_drones: states.size,
+      center: swarmCenter.map(p => Math.round(p * 10) / 10),
+      groups: groupSummaries,
+    },
+    perception: {
+      objects: detectedWithRelative,
+      object_count: detectedWithRelative.length,
+    },
+  };
 }
 
 /**
- * Wrap result with context
+ * Get human-readable context string
+ */
+async function getContextString() {
+  const ctx = await getRichContext();
+  const lines = [`📍 Swarm (${ctx.swarm.total_drones} drones):`];
+
+  for (const [name, group] of Object.entries(ctx.swarm.groups)) {
+    const pos = group.center ? ` at [${group.center.join(', ')}]` : '';
+    const form = group.formation !== 'none' ? ` in ${group.formation}` : '';
+    const task = group.task?.type || 'idle';
+    lines.push(`  ${name} (${group.count}): ${task}${form}${pos}`);
+  }
+
+  if (ctx.perception.object_count > 0) {
+    lines.push('');
+    lines.push('👁️ Detected:');
+    for (const obj of ctx.perception.objects.slice(0, 5)) {
+      const dist = `${obj.relative.distance_m}m ${obj.relative.direction}`;
+      const moving = obj.motion ? ` (moving ${obj.motion.speed_mps}m/s)` : '';
+      lines.push(`  ${obj.class}: ${dist}${moving}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Wrap result with both human-readable and structured context
  */
 async function withContext(result) {
-  const context = await getContext();
-  return `${result}\n\n---\n${context}`;
+  const richContext = await getRichContext();
+  const humanContext = await getContextString();
+  
+  // Include both: human-readable for quick understanding, JSON for precise reasoning
+  return {
+    message: result,
+    context: richContext,
+    summary: humanContext,
+  };
+}
+
+/**
+ * Format tool result with context
+ */
+function formatResult(resultWithContext) {
+  if (typeof resultWithContext === 'string') {
+    return resultWithContext;
+  }
+  
+  const { message, context, summary } = resultWithContext;
+  
+  // Human-readable output with JSON context block
+  return `${message}
+
+---
+${summary}
+
+<context>
+${JSON.stringify(context, null, 2)}
+</context>`;
 }
 
 async function executeTool(name, args) {
@@ -613,8 +736,14 @@ async function executeTool(name, args) {
     }
 
     case 'status': {
-      // Full context is the status
-      return getContext();
+      // Full rich context
+      const ctx = await getRichContext();
+      const summary = await getContextString();
+      return {
+        message: 'Current swarm status',
+        context: ctx,
+        summary,
+      };
     }
 
     // --- Group Management ---
@@ -637,7 +766,13 @@ async function executeTool(name, args) {
       if (groupList.length === 0) {
         return 'No active groups';
       }
-      return getContext();
+      const ctx = await getRichContext();
+      const summary = await getContextString();
+      return {
+        message: `Active groups: ${groupList.join(', ')}`,
+        context: ctx,
+        summary,
+      };
     }
 
     default:
@@ -673,10 +808,11 @@ async function handleMessage(message) {
       case 'tools/call': {
         const { name, arguments: args } = params;
         const result = await executeTool(name, args || {});
+        const formatted = formatResult(result);
         return {
           id,
           result: {
-            content: [{ type: 'text', text: result }],
+            content: [{ type: 'text', text: formatted }],
           },
         };
       }
