@@ -25,6 +25,7 @@ import { MockAdapter } from './adapters/mock.js';
 import { Aerostack2Adapter } from './adapters/aerostack2.js';
 import { PyBulletAdapter } from './adapters/pybullet.js';
 import { ArduPilotAdapter } from './adapters/ardupilot.js';
+import { WebotsAdapter } from './adapters/webots.js';
 
 // --- Configuration ---
 
@@ -48,6 +49,9 @@ if (PERCEPTION === 'yolo') {
 
 let backend;
 switch (BACKEND) {
+  case 'webots':
+    backend = new WebotsAdapter({ droneCount: DRONE_COUNT });
+    break;
   case 'ardupilot':
     backend = new ArduPilotAdapter({ droneCount: DRONE_COUNT });
     break;

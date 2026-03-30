@@ -1,0 +1,112 @@
+#VRML_SIM R2023b utf8
+# AutoM8te Drone Swarm World
+# 4 Mavic 2 Pro drones in a grid formation
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/robots/dji/mavic/protos/Mavic2Pro.proto"
+
+WorldInfo {
+  title "AutoM8te Swarm"
+  basicTimeStep 8
+  defaultDamping Damping {
+    linear 0.5
+    angular 0.5
+  }
+}
+
+Viewpoint {
+  orientation -0.2 0.2 0.96 1.6
+  position 0 -30 20
+  follow "DRONE0"
+}
+
+TexturedBackground {
+}
+
+TexturedBackgroundLight {
+}
+
+RectangleArena {
+  floorSize 100 100
+  floorTileSize 5 5
+}
+
+# Supervisor robot for control
+Robot {
+  name "supervisor"
+  controller "webots_bridge"
+  supervisor TRUE
+}
+
+# Drone 0
+DEF DRONE0 Mavic2Pro {
+  translation -5 -5 0.1
+  name "drone0"
+}
+
+# Drone 1
+DEF DRONE1 Mavic2Pro {
+  translation 5 -5 0.1
+  name "drone1"
+}
+
+# Drone 2
+DEF DRONE2 Mavic2Pro {
+  translation -5 5 0.1
+  name "drone2"
+}
+
+# Drone 3
+DEF DRONE3 Mavic2Pro {
+  translation 5 5 0.1
+  name "drone3"
+}
+
+# Target objects for perception testing
+DEF PERSON Solid {
+  translation 20 0 0.9
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.8 0.2 0.2
+      }
+      geometry Cylinder {
+        height 1.8
+        radius 0.3
+      }
+    }
+  ]
+  name "person"
+}
+
+DEF CAR Solid {
+  translation 30 -15 0.5
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.2 0.2 0.8
+      }
+      geometry Box {
+        size 4 2 1.5
+      }
+    }
+  ]
+  name "car"
+}
+
+DEF TRUCK Solid {
+  translation 50 0 1
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.2 0.6 0.2
+      }
+      geometry Box {
+        size 8 2.5 2.5
+      }
+    }
+  ]
+  name "truck"
+}
