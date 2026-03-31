@@ -141,8 +141,6 @@ Fog {
 }
 SumoInterface {
   gui FALSE
-  directory "autom8te_city_net"
-  useNetconvert FALSE
 }
 DEF GROUND Solid {
   boundingObject DEF GROUND_PLANE Plane {
