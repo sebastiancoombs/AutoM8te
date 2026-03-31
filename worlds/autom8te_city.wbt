@@ -1834,9 +1834,9 @@ Robot {
     "--altitude"
     "0.5"
     "--center-x"
-    "0"
+    "50"
     "--center-z"
-    "0"
+    "-50"
   ]
   supervisor TRUE
 }
