@@ -8,5 +8,9 @@ centralWidgetVisible: 1
 orthographicViewHeight: 1
 textFiles: -1
 consoles: Console:All:All
-renderingDevicePerspectives: vehicle:camera;1;1;0;0
-renderingDevicePerspectives: vehicle:display;1;1;0;0
+renderingDevicePerspectives: drone_0:camera;0;1;0;0
+renderingDevicePerspectives: drone_1:camera;0;1;0;0
+renderingDevicePerspectives: drone_2:camera;0;1;0;0
+renderingDevicePerspectives: drone_3:camera;0;1;0;0
+renderingDevicePerspectives: vehicle:camera;0;1;0;0
+renderingDevicePerspectives: vehicle:display;0;1;0;0

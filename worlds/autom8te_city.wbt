@@ -1826,7 +1826,7 @@ Pedestrian {
 
 # === AUTOM8TE DRONES START ===
 DEF DRONE_0 Iris {
-  translation 47.5 0.3 -52.5
+  translation -47.5 42.5 0.4
   name "drone_0"
   controller "ardupilot_vehicle_controller"
   controllerArgs [
@@ -1850,7 +1850,7 @@ DEF DRONE_0 Iris {
   ]
 }
 DEF DRONE_1 Iris {
-  translation 52.5 0.3 -52.5
+  translation -42.5 42.5 0.4
   name "drone_1"
   controller "ardupilot_vehicle_controller"
   controllerArgs [
@@ -1874,7 +1874,7 @@ DEF DRONE_1 Iris {
   ]
 }
 DEF DRONE_2 Iris {
-  translation 47.5 0.3 -47.5
+  translation -47.5 47.5 0.4
   name "drone_2"
   controller "ardupilot_vehicle_controller"
   controllerArgs [
@@ -1898,7 +1898,7 @@ DEF DRONE_2 Iris {
   ]
 }
 DEF DRONE_3 Iris {
-  translation 52.5 0.3 -47.5
+  translation -42.5 47.5 0.4
   name "drone_3"
   controller "ardupilot_vehicle_controller"
   controllerArgs [

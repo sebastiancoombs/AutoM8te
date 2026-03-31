@@ -45,19 +45,19 @@ DRONE_TEMPLATE = """DEF DRONE_{id} Iris {{
 }}"""
 
 
-def compute_positions(count, spacing, center_x, center_z, altitude=0.3):
+def compute_positions(count, spacing, center_x, center_y, altitude=0.4):
     positions = []
     cols = math.ceil(math.sqrt(count))
     rows = math.ceil(count / cols)
     offset_x = (cols - 1) * spacing / 2
-    offset_z = (rows - 1) * spacing / 2
+    offset_y = (rows - 1) * spacing / 2
 
     for i in range(count):
         col = i % cols
         row = i // cols
         x = center_x + col * spacing - offset_x
-        y = altitude  # Y = up in NUE
-        z = center_z + row * spacing - offset_z
+        y = center_y + row * spacing - offset_y
+        z = altitude  # Z = up in ENU (R2025a default)
         positions.append((x, y, z))
     return positions
 
@@ -66,9 +66,9 @@ def main():
     parser = argparse.ArgumentParser(description="Add drones to world file")
     parser.add_argument("--count", type=int, default=4)
     parser.add_argument("--spacing", type=float, default=5.0)
-    parser.add_argument("--center-x", type=float, default=50.0)
-    parser.add_argument("--center-z", type=float, default=-50.0)
-    parser.add_argument("--altitude", type=float, default=0.3)
+    parser.add_argument("--center-x", type=float, default=-45.0)
+    parser.add_argument("--center-y", type=float, default=45.0)
+    parser.add_argument("--altitude", type=float, default=0.4)
     parser.add_argument("--camera-port-base", type=int, default=5600)
     parser.add_argument("--world", type=str, default=WORLD_FILE)
     args = parser.parse_args()
@@ -104,7 +104,7 @@ def main():
     # Generate drone nodes
     positions = compute_positions(
         args.count, args.spacing,
-        args.center_x, args.center_z, args.altitude
+        args.center_x, args.center_y, args.altitude
     )
 
     drones_section = f"\n{DRONE_MARKER_START}\n"
