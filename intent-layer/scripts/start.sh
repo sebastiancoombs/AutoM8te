@@ -103,44 +103,85 @@ case $BACKEND in
     webots)
         echo -e "${GREEN}Starting ArduPilot + Webots...${NC}"
         
-        # Check ARDUPILOT_PATH
-        if [ -z "$ARDUPILOT_PATH" ]; then
-            echo -e "${RED}Error: ARDUPILOT_PATH not set${NC}"
-            echo "Set it to your ardupilot repo:"
-            echo "  export ARDUPILOT_PATH=/path/to/ardupilot"
+        AUTOM8TE_ROOT="$(cd "$INTENT_LAYER_DIR/.." && pwd)"
+        WEBOTS_WORLD="$AUTOM8TE_ROOT/worlds/autom8te_city.wbt"
+        IRIS_PARM="$AUTOM8TE_ROOT/worlds/params/iris.parm"
+        
+        # Check for sim_vehicle.py
+        if ! command -v sim_vehicle.py &> /dev/null; then
+            echo -e "${RED}Error: sim_vehicle.py not found${NC}"
+            echo "Install ArduPilot or add to PATH:"
+            echo "  git clone https://github.com/ArduPilot/ardupilot"
+            echo "  export PATH=\$PATH:/path/to/ardupilot/Tools/autotest"
             exit 1
         fi
         
-        WEBOTS_WORLD="$ARDUPILOT_PATH/libraries/SITL/examples/Webots_Python/worlds/iris.wbt"
-        if [ ! -f "$WEBOTS_WORLD" ]; then
-            echo -e "${RED}Error: Webots world not found at:${NC}"
-            echo "  $WEBOTS_WORLD"
-            echo "Make sure ARDUPILOT_PATH points to a valid ardupilot clone."
+        # Check for pymavlink
+        if ! python3 -c "import pymavlink" 2>/dev/null; then
+            echo -e "${RED}Error: pymavlink not installed${NC}"
+            echo "Install: pip install pymavlink"
             exit 1
         fi
         
         # Check for Webots
-        if ! command -v webots &> /dev/null; then
+        if ! command -v webots &> /dev/null && [ ! -d "/Applications/Webots.app" ]; then
             echo -e "${RED}Error: Webots not installed${NC}"
             echo "Install: brew install --cask webots"
             exit 1
         fi
         
-        echo ""
-        echo -e "${YELLOW}IMPORTANT: Start Webots first!${NC}"
-        echo "1. Open Webots"
-        echo "2. File > Open World..."
-        echo "3. Select: $WEBOTS_WORLD"
-        echo "4. Press Run in Webots"
-        echo ""
-        echo "Press Enter when Webots is running..."
-        read -r
+        # Check world file
+        if [ ! -f "$WEBOTS_WORLD" ]; then
+            echo -e "${RED}Error: World file not found at:${NC}"
+            echo "  $WEBOTS_WORLD"
+            exit 1
+        fi
         
-        echo -e "${GREEN}Starting intent layer with Webots backend...${NC}"
+        # Kill existing SITL
+        pkill -f sim_vehicle.py 2>/dev/null || true
+        sleep 1
+        
+        # Launch Webots with our city world
+        echo -e "${GREEN}Opening Webots with AutoM8te city...${NC}"
+        if [ -d "/Applications/Webots.app" ]; then
+            open -a Webots "$WEBOTS_WORLD" &
+        else
+            webots "$WEBOTS_WORLD" &
+        fi
+        
+        echo -e "${YELLOW}Waiting for Webots to load (10 seconds)...${NC}"
+        sleep 10
+        
+        # Start SITL instances with webots-python model
+        BASE_PORT=14550
+        PORT_STEP=10
+        PORTS=""
+        
+        for ((i=0; i<DRONE_COUNT; i++)); do
+            PORT=$((BASE_PORT + i * PORT_STEP))
+            PORTS="${PORTS}${PORT},"
+            
+            echo "  Starting SITL drone$i → port $PORT (webots-python model)..."
+            sim_vehicle.py -v ArduCopter \
+                --model webots-python \
+                --instance $i \
+                -I$i \
+                --out udp:127.0.0.1:$PORT \
+                --add-param-file="$IRIS_PARM" \
+                --no-mavproxy \
+                > /tmp/sitl_drone${i}.log 2>&1 &
+        done
+        PORTS=${PORTS%,}
+        
+        echo ""
+        echo -e "${YELLOW}Waiting for SITL to connect to Webots (15-30 seconds)...${NC}"
+        echo "Check Webots console for 'Connected to ardupilot SITL' messages."
+        sleep 20
+        
+        echo -e "${GREEN}Starting intent layer...${NC}"
         cd "$INTENT_LAYER_DIR"
-        AUTOM8TE_BACKEND=webots \
+        AUTOM8TE_BACKEND=ardupilot \
         AUTOM8TE_DRONES=$DRONE_COUNT \
-        ARDUPILOT_PATH="$ARDUPILOT_PATH" \
         node index.js
         ;;
         
