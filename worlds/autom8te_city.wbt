@@ -124,8 +124,8 @@ WorldInfo {
   ]
 }
 Viewpoint {
-  orientation -0.19884042049686187 0.1891995425947396 0.96159555960839 1.657752561043425
-  position -47.12421008954344 -9.254277030216358 23.911145154206356
+  orientation 0.008777580136207299 0.9942430776335484 -0.1067879050488513 0.19861681511558832
+  position -67.35963767412703 48.30207714707147 4.337647090948829
   near 1
   follow "vehicle"
   lensFlare LensFlare {
@@ -1776,13 +1776,6 @@ Crossroad {
     "17"
   ]
 }
-
-# ============================================================
-# AUTOM8TE ADDITIONS
-# ============================================================
-
-# --- Walking Pedestrians for YOLO detection ---
-# These walk in loops around the city blocks
 Pedestrian {
   translation 10 1.27 15
   name "walker_1"
@@ -1819,22 +1812,190 @@ Pedestrian {
     "-5 1.27 30, 15 1.27 30, 15 1.27 20, -5 1.27 20"
   ]
 }
-
-# --- Drone Spawner Supervisor ---
-Robot {
-  name "spawner"
-  controller "drone_spawner"
+DEF DRONE_0 Iris {
+  translation -47.5 42.5 0.4
+  name "drone_0"
+  controller "ardupilot_vehicle_controller"
   controllerArgs [
-    "--count"
-    "4"
-    "--spacing"
-    "5"
-    "--altitude"
-    "0.4"
-    "--center-x"
-    "-45"
-    "--center-y"
-    "45"
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5600"
   ]
-  supervisor TRUE
+  extensionSlot [
+    Camera {
+      translation 0.2 0 0.01
+      fieldOfView 1.2
+      width 640
+      height 480
+      near 0.1
+    }
+  ]
 }
+DEF DRONE_1 Iris {
+  translation -42.5 42.5 0.4
+  name "drone_1"
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5601"
+  ]
+  extensionSlot [
+    Camera {
+      translation 0.2 0 0.01
+      fieldOfView 1.2
+      width 640
+      height 480
+      near 0.1
+    }
+  ]
+}
+DEF DRONE_2 Iris {
+  translation -47.5 47.5 0.4
+  name "drone_2"
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5602"
+  ]
+  extensionSlot [
+    Camera {
+      translation 0.2 0 0.01
+      fieldOfView 1.2
+      width 640
+      height 480
+      near 0.1
+    }
+  ]
+}
+DEF DRONE_3 Iris {
+  translation -42.5 47.5 0.4
+  name "drone_3"
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5603"
+  ]
+  extensionSlot [
+    Camera {
+      translation 0.2 0 0.01
+      fieldOfView 1.2
+      width 640
+      height 480
+      near 0.1
+    }
+  ]
+}
+
+# === AUTOM8TE DRONES START ===
+DEF DRONE_0 Iris {
+  translation -47.5 42.5 0.4
+  name "drone_0"
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5600"
+  ]
+  extensionSlot [
+    Camera {
+      name "camera"
+      translation 0.2 0 0.01
+      rotation 0 0 1 0
+      width 640
+      height 480
+      fieldOfView 1.2
+      near 0.1
+    }
+  ]
+}
+DEF DRONE_1 Iris {
+  translation -42.5 42.5 0.4
+  name "drone_1"
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5601"
+  ]
+  extensionSlot [
+    Camera {
+      name "camera"
+      translation 0.2 0 0.01
+      rotation 0 0 1 0
+      width 640
+      height 480
+      fieldOfView 1.2
+      near 0.1
+    }
+  ]
+}
+DEF DRONE_2 Iris {
+  translation -47.5 47.5 0.4
+  name "drone_2"
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5602"
+  ]
+  extensionSlot [
+    Camera {
+      name "camera"
+      translation 0.2 0 0.01
+      rotation 0 0 1 0
+      width 640
+      height 480
+      fieldOfView 1.2
+      near 0.1
+    }
+  ]
+}
+DEF DRONE_3 Iris {
+  translation -42.5 47.5 0.4
+  name "drone_3"
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5603"
+  ]
+  extensionSlot [
+    Camera {
+      name "camera"
+      translation 0.2 0 0.01
+      rotation 0 0 1 0
+      width 640
+      height 480
+      fieldOfView 1.2
+      near 0.1
+    }
+  ]
+}
+# === AUTOM8TE DRONES END ===
