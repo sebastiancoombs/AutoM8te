@@ -2,7 +2,7 @@
 AutoM8te Drone Spawner — Webots Supervisor Controller
 
 Spawns N ArduPilot Iris drones into any Webots world at runtime.
-Each drone gets a camera and connects to its own SITL instance.
+Each drone gets a forward-facing camera and connects to its own SITL instance.
 
 Usage in .wbt file:
     Robot {
@@ -12,13 +12,13 @@ Usage in .wbt file:
         supervisor TRUE
     }
 
-Each drone:
-  - Uses ArduPilot's ardupilot_vehicle_controller
-  - Gets assigned a unique SITL port (5760 + i*10)
-  - Has a downward-facing camera for YOLO/perception
-  - Spawns in a grid pattern with configurable spacing
+Requires in the .wbt EXTERNPROTO section:
+    EXTERNPROTO "../protos/Iris.proto"
 
-Requires EXTERNPROTO declarations in the .wbt file for Iris.
+Each drone uses ArduPilot's official Iris PROTO with:
+  - ardupilot_vehicle_controller (handles SITL communication)
+  - Forward-facing camera in the extension slot
+  - Unique SITL instance port per drone
 """
 
 import argparse
@@ -33,16 +33,12 @@ except ImportError:
 
 TIME_STEP = 32
 
-# --- Drone PROTO template ---
-# This spawns an Iris-like quadcopter with camera.
-# If you have ArduPilot's Iris.proto available, use that instead.
-# This inline definition works standalone without external protos.
-
+# --- Iris PROTO spawn template ---
+# Uses ArduPilot's official Iris.proto with camera in extensionSlot
 DRONE_TEMPLATE = """
-DEF DRONE_{id} Robot {{
-  name "drone_{id}"
+DEF DRONE_{id} Iris {{
   translation {x} {y} {z}
-  rotation 0 0 1 0
+  name "drone_{id}"
   controller "ardupilot_vehicle_controller"
   controllerArgs [
     "--motors"
@@ -51,161 +47,18 @@ DEF DRONE_{id} Robot {{
     "camera"
     "--camera-port"
     "{camera_port}"
-    "--sitl-address"
-    "127.0.0.1"
-    "--sitl-port-start"
-    "{sitl_port}"
   ]
-  supervisor FALSE
-  children [
-    # --- Sensors required by ArduPilot ---
-    Accelerometer {{
-      name "accelerometer"
-      xAxis TRUE
-      yAxis TRUE
-      zAxis TRUE
-    }}
-    Gyro {{
-      name "gyro"
-      xAxis TRUE
-      yAxis TRUE
-      zAxis TRUE
-    }}
-    InertialUnit {{
-      name "inertial_unit"
-    }}
-    GPS {{
-      name "gps"
-    }}
-
-    # --- Forward-facing camera for YOLO/perception ---
+  extensionSlot [
     Camera {{
       name "camera"
-      translation 0.2 0 0
+      translation 0.2 0 0.01
       rotation 0 0 1 0
       width 640
       height 480
       fieldOfView 1.2
       near 0.1
     }}
-
-    # --- Body shape (simple box placeholder) ---
-    Shape {{
-      appearance PBRAppearance {{
-        baseColor 0.2 0.2 0.2
-        metalness 0.5
-      }}
-      geometry Box {{
-        size 0.4 0.4 0.1
-      }}
-    }}
-
-    # --- 4 Propellers ---
-    Propeller {{
-      shaftAxis 0 0 1
-      centerOfThrust 0.13 0.13 0.02
-      thrustConstants 0.00026 0
-      torqueConstants 5.2e-06 0
-      device RotationalMotor {{
-        name "m1_motor"
-        maxVelocity 600
-      }}
-      fastHelix Solid {{
-        children [
-          Shape {{
-            appearance PBRAppearance {{
-              baseColor 0.1 0.1 0.8
-              metalness 0.3
-            }}
-            geometry Cylinder {{
-              height 0.005
-              radius 0.1
-            }}
-          }}
-        ]
-      }}
-    }}
-    Propeller {{
-      shaftAxis 0 0 1
-      centerOfThrust -0.13 0.13 0.02
-      thrustConstants 0.00026 0
-      torqueConstants -5.2e-06 0
-      device RotationalMotor {{
-        name "m2_motor"
-        maxVelocity 600
-      }}
-      fastHelix Solid {{
-        children [
-          Shape {{
-            appearance PBRAppearance {{
-              baseColor 0.1 0.1 0.8
-              metalness 0.3
-            }}
-            geometry Cylinder {{
-              height 0.005
-              radius 0.1
-            }}
-          }}
-        ]
-      }}
-    }}
-    Propeller {{
-      shaftAxis 0 0 1
-      centerOfThrust -0.13 -0.13 0.02
-      thrustConstants 0.00026 0
-      torqueConstants 5.2e-06 0
-      device RotationalMotor {{
-        name "m3_motor"
-        maxVelocity 600
-      }}
-      fastHelix Solid {{
-        children [
-          Shape {{
-            appearance PBRAppearance {{
-              baseColor 0.8 0.1 0.1
-              metalness 0.3
-            }}
-            geometry Cylinder {{
-              height 0.005
-              radius 0.1
-            }}
-          }}
-        ]
-      }}
-    }}
-    Propeller {{
-      shaftAxis 0 0 1
-      centerOfThrust 0.13 -0.13 0.02
-      thrustConstants 0.00026 0
-      torqueConstants -5.2e-06 0
-      device RotationalMotor {{
-        name "m4_motor"
-        maxVelocity 600
-      }}
-      fastHelix Solid {{
-        children [
-          Shape {{
-            appearance PBRAppearance {{
-              baseColor 0.8 0.1 0.1
-              metalness 0.3
-            }}
-            geometry Cylinder {{
-              height 0.005
-              radius 0.1
-            }}
-          }}
-        ]
-      }}
-    }}
   ]
-  boundingObject Box {{
-    size 0.4 0.4 0.1
-  }}
-  physics Physics {{
-    density -1
-    mass 1.5
-    centerOfMass 0 0 0
-  }}
 }}
 """
 
@@ -238,16 +91,14 @@ def main():
     parser.add_argument("--altitude", type=float, default=0.5, help="Spawn altitude (meters)")
     parser.add_argument("--center-x", type=float, default=0.0, help="Center X of spawn grid")
     parser.add_argument("--center-y", type=float, default=0.0, help="Center Y of spawn grid")
-    parser.add_argument("--sitl-port-base", type=int, default=5760, help="Base SITL port (increments by 10)")
     parser.add_argument("--camera-port-base", type=int, default=5600, help="Base camera stream port")
 
     args = parser.parse_args()
 
     supervisor = Supervisor()
 
-    print(f"[AutoM8te] Spawning {args.count} drones...")
+    print(f"[AutoM8te] Spawning {args.count} Iris drones...")
     print(f"[AutoM8te] Spacing: {args.spacing}m, Altitude: {args.altitude}m")
-    print(f"[AutoM8te] SITL ports: {args.sitl_port_base} - {args.sitl_port_base + (args.count - 1) * 10}")
 
     # Get the root node to add children
     root = supervisor.getRoot()
@@ -261,13 +112,11 @@ def main():
     spawned_drones = []
 
     for i, (x, y, z) in enumerate(positions):
-        sitl_port = args.sitl_port_base + i * 10
         camera_port = args.camera_port_base + i
 
         drone_string = DRONE_TEMPLATE.format(
             id=i,
             x=x, y=y, z=z,
-            sitl_port=sitl_port,
             camera_port=camera_port,
         )
 
@@ -276,18 +125,21 @@ def main():
             "id": i,
             "name": f"drone_{i}",
             "position": (x, y, z),
-            "sitl_port": sitl_port,
             "camera_port": camera_port,
         })
 
-        print(f"[AutoM8te] Spawned drone_{i} at ({x:.1f}, {y:.1f}, {z:.1f}) → SITL:{sitl_port} CAM:{camera_port}")
+        print(f"[AutoM8te] Spawned drone_{i} at ({x:.1f}, {y:.1f}, {z:.1f}) → CAM:{camera_port}")
 
-    print(f"[AutoM8te] All {args.count} drones spawned successfully!")
+    print(f"[AutoM8te] All {args.count} Iris drones spawned!")
+    print(f"[AutoM8te] Start SITL instances:")
+    for i in range(args.count):
+        print(f"[AutoM8te]   sim_vehicle.py -v ArduCopter --model webots-python -I{i}")
+
     print(f"[AutoM8te] Entering monitoring loop...")
 
-    # Keep running to monitor drone positions
+    # Monitor loop — track drone positions for telemetry
     while supervisor.step(TIME_STEP) != -1:
-        # Future: telemetry logging, collision detection, etc.
+        # Future: telemetry logging, collision detection, health monitoring
         pass
 
 
