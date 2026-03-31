@@ -1820,10 +1820,6 @@ Pedestrian {
   ]
 }
 
-# --- Drone Spawner Supervisor ---
-# Spawns N drones with cameras at runtime
-# Adjust --count to change number of drones
-
 # === AUTOM8TE DRONES START ===
 DEF DRONE_0 Iris {
   translation -47.5 42.5 0.4
