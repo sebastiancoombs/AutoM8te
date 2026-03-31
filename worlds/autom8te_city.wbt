@@ -1820,101 +1820,21 @@ Pedestrian {
   ]
 }
 
-# === AUTOM8TE DRONES START ===
-DEF DRONE_0 Iris {
-  translation -47.5 42.5 0.4
-  name "drone_0"
-  controller "ardupilot_vehicle_controller"
+# --- Drone Spawner Supervisor ---
+Robot {
+  name "spawner"
+  controller "drone_spawner"
   controllerArgs [
-    "--motors"
-    "m1_motor, m2_motor, m3_motor, m4_motor"
-    "--camera"
-    "camera"
-    "--camera-port"
-    "5600"
+    "--count"
+    "4"
+    "--spacing"
+    "5"
+    "--altitude"
+    "0.4"
+    "--center-x"
+    "-45"
+    "--center-y"
+    "45"
   ]
-  extensionSlot [
-    Camera {
-      name "camera"
-      translation 0.2 0 0.01
-      rotation 0 0 1 0
-      width 640
-      height 480
-      fieldOfView 1.2
-      near 0.1
-    }
-  ]
+  supervisor TRUE
 }
-DEF DRONE_1 Iris {
-  translation -42.5 42.5 0.4
-  name "drone_1"
-  controller "ardupilot_vehicle_controller"
-  controllerArgs [
-    "--motors"
-    "m1_motor, m2_motor, m3_motor, m4_motor"
-    "--camera"
-    "camera"
-    "--camera-port"
-    "5601"
-  ]
-  extensionSlot [
-    Camera {
-      name "camera"
-      translation 0.2 0 0.01
-      rotation 0 0 1 0
-      width 640
-      height 480
-      fieldOfView 1.2
-      near 0.1
-    }
-  ]
-}
-DEF DRONE_2 Iris {
-  translation -47.5 47.5 0.4
-  name "drone_2"
-  controller "ardupilot_vehicle_controller"
-  controllerArgs [
-    "--motors"
-    "m1_motor, m2_motor, m3_motor, m4_motor"
-    "--camera"
-    "camera"
-    "--camera-port"
-    "5602"
-  ]
-  extensionSlot [
-    Camera {
-      name "camera"
-      translation 0.2 0 0.01
-      rotation 0 0 1 0
-      width 640
-      height 480
-      fieldOfView 1.2
-      near 0.1
-    }
-  ]
-}
-DEF DRONE_3 Iris {
-  translation -42.5 47.5 0.4
-  name "drone_3"
-  controller "ardupilot_vehicle_controller"
-  controllerArgs [
-    "--motors"
-    "m1_motor, m2_motor, m3_motor, m4_motor"
-    "--camera"
-    "camera"
-    "--camera-port"
-    "5603"
-  ]
-  extensionSlot [
-    Camera {
-      name "camera"
-      translation 0.2 0 0.01
-      rotation 0 0 1 0
-      width 640
-      height 480
-      fieldOfView 1.2
-      near 0.1
-    }
-  ]
-}
-# === AUTOM8TE DRONES END ===
