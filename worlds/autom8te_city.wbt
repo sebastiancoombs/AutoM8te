@@ -1832,7 +1832,7 @@ Robot {
     "--spacing"
     "5"
     "--altitude"
-    "0.5"
+    "5"
     "--center-x"
     "50"
     "--center-z"
