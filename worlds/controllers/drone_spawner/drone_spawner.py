@@ -78,11 +78,11 @@ DEF DRONE_{id} Robot {{
       name "gps"
     }}
 
-    # --- Downward-facing camera for YOLO/perception ---
+    # --- Forward-facing camera for YOLO/perception ---
     Camera {{
       name "camera"
-      translation 0 0 -0.05
-      rotation 1 0 0 1.5708
+      translation 0.2 0 0
+      rotation 0 0 1 0
       width 640
       height 480
       fieldOfView 1.2
