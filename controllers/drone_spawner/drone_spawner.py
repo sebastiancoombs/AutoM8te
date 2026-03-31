@@ -63,22 +63,27 @@ DEF DRONE_{id} Iris {{
 """
 
 
-def compute_spawn_positions(count, spacing, center_x=0, center_y=0, altitude=0.5):
-    """Compute grid spawn positions for N drones."""
+def compute_spawn_positions(count, spacing, center_x=0, center_z=0, altitude=0.5):
+    """Compute grid spawn positions for N drones.
+    
+    Webots NUE coordinate system:
+      X = North, Y = Up, Z = East
+    Grid spreads on X and Z (ground plane), Y = altitude.
+    """
     positions = []
     cols = math.ceil(math.sqrt(count))
     rows = math.ceil(count / cols)
 
-    # Center the grid
+    # Center the grid on the ground plane (X, Z)
     offset_x = (cols - 1) * spacing / 2
-    offset_y = (rows - 1) * spacing / 2
+    offset_z = (rows - 1) * spacing / 2
 
     for i in range(count):
         col = i % cols
         row = i // cols
         x = center_x + col * spacing - offset_x
-        y = center_y + row * spacing - offset_y
-        z = altitude
+        y = altitude  # Y is UP in NUE
+        z = center_z + row * spacing - offset_z
         positions.append((x, y, z))
 
     return positions
@@ -89,8 +94,8 @@ def main():
     parser.add_argument("--count", type=int, default=4, help="Number of drones to spawn")
     parser.add_argument("--spacing", type=float, default=5.0, help="Spacing between drones (meters)")
     parser.add_argument("--altitude", type=float, default=0.5, help="Spawn altitude (meters)")
-    parser.add_argument("--center-x", type=float, default=0.0, help="Center X of spawn grid")
-    parser.add_argument("--center-y", type=float, default=0.0, help="Center Y of spawn grid")
+    parser.add_argument("--center-x", type=float, default=0.0, help="Center X of spawn grid (North)")
+    parser.add_argument("--center-z", type=float, default=0.0, help="Center Z of spawn grid (East)")
     parser.add_argument("--camera-port-base", type=int, default=5600, help="Base camera stream port")
 
     args = parser.parse_args()
@@ -106,7 +111,7 @@ def main():
 
     positions = compute_spawn_positions(
         args.count, args.spacing,
-        args.center_x, args.center_y, args.altitude
+        args.center_x, args.center_z, args.altitude
     )
 
     spawned_drones = []

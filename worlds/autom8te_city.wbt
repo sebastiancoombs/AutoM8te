@@ -1835,7 +1835,7 @@ Robot {
     "0.5"
     "--center-x"
     "0"
-    "--center-y"
+    "--center-z"
     "0"
   ]
   supervisor TRUE
