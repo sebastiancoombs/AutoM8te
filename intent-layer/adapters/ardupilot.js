@@ -90,7 +90,19 @@ export class ArduPilotAdapter {
 
     this.process.stderr.on('data', (data) => {
       const msg = data.toString().trim();
-      if (msg) console.error('[ArduPilot]', msg);
+      if (msg) {
+        console.error('[ArduPilot Bridge]', msg);
+        // Count connections from bridge stderr
+        if (msg.includes('Connected to')) {
+          const match = msg.match(/Connected to (drone\d+)/);
+          if (match) {
+            this.drones.set(match[1], {
+              id: match[1], position: [0,0,0], velocity: [0,0,0],
+              heading: 0, armed: false, mode: 'UNKNOWN', battery: 100, status: 'connecting'
+            });
+          }
+        }
+      }
     });
 
     this.process.on('close', (code) => {

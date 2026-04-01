@@ -1821,6 +1821,8 @@ DEF DRONE_0 Iris {
   controllerArgs [
     "--motors"
     "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--instance"
+    "0"
     "--camera"
     "camera"
     "--camera-port"
@@ -1845,6 +1847,8 @@ DEF DRONE_1 Iris {
   controllerArgs [
     "--motors"
     "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--instance"
+    "1"
     "--camera"
     "camera"
     "--camera-port"
@@ -1869,6 +1873,8 @@ DEF DRONE_2 Iris {
   controllerArgs [
     "--motors"
     "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--instance"
+    "2"
     "--camera"
     "camera"
     "--camera-port"
@@ -1893,6 +1899,8 @@ DEF DRONE_3 Iris {
   controllerArgs [
     "--motors"
     "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--instance"
+    "3"
     "--camera"
     "camera"
     "--camera-port"
