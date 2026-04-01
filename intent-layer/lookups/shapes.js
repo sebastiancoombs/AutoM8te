@@ -275,7 +275,7 @@ loadLibrary();
  * Create a new shape from curves and optionally save it
  */
 export function createShape(name, curves, options = {}) {
-  const { scale = 1, save = true } = options;
+  const { scale = 1, save = true, duration_s = null, tick_ms = 100 } = options;
 
   // Validate curves by sampling
   for (const curve of curves) {
@@ -291,6 +291,12 @@ export function createShape(name, curves, options = {}) {
     scale,
     created: new Date().toISOString(),
   };
+
+  // If duration provided, mark as animated
+  if (duration_s) {
+    shape.duration_s = duration_s;
+    shape.tick_ms = tick_ms;
+  }
 
   if (save) {
     shapeLibrary[name.toLowerCase()] = shape;

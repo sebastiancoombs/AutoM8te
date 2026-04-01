@@ -158,5 +158,44 @@
     ],
     "scale": 1,
     "created": "2026-04-01T13:39:45.049Z"
+  },
+  "waving_flag": {
+    "name": "waving_flag",
+    "curves": [
+      {
+        "equation": "parametric",
+        "x": "t",
+        "y": "0",
+        "z": "2*sin(t*2 + time*3)",
+        "t": [
+          0,
+          20
+        ]
+      },
+      {
+        "equation": "parametric",
+        "x": "t",
+        "y": "5",
+        "z": "2*sin(t*2 + time*3 + 0.5)",
+        "t": [
+          0,
+          20
+        ]
+      },
+      {
+        "equation": "parametric",
+        "x": "t",
+        "y": "10",
+        "z": "2*sin(t*2 + time*3 + 1)",
+        "t": [
+          0,
+          20
+        ]
+      }
+    ],
+    "scale": 1,
+    "created": "2026-04-01T13:45:51.489Z",
+    "duration_s": 15,
+    "tick_ms": 100
   }
 }

@@ -59,6 +59,45 @@ switch (BACKEND) {
 // --- Group Manager ---
 const groups = new GroupManager();
 
+// --- Animation Engine ---
+const activeAnimations = new Map(); // key → intervalId
+
+function stopAnimation(key) {
+  const id = activeAnimations.get(key);
+  if (id) { clearInterval(id); activeAnimations.delete(key); }
+}
+
+function stopAllAnimations() {
+  for (const [key, id] of activeAnimations) { clearInterval(id); }
+  activeAnimations.clear();
+}
+
+function startAnimation(key, shape, droneIds, spacing, backend) {
+  stopAnimation(key); // clear any existing animation on this key
+  const duration = shape.duration_s || 30;
+  const tickRate = shape.tick_ms || 100;
+  let time = 0;
+
+  const interval = setInterval(async () => {
+    time += tickRate / 1000;
+    if (time >= duration) {
+      clearInterval(interval);
+      activeAnimations.delete(key);
+      return;
+    }
+    try {
+      const offsets = resolveCurves(shape.curves, droneIds.length, shape.scale || spacing, time);
+      await backend.setFormation(offsets, droneIds);
+    } catch (err) {
+      console.error(`[Animation] ${key} error:`, err.message);
+      clearInterval(interval);
+      activeAnimations.delete(key);
+    }
+  }, tickRate);
+
+  activeAnimations.set(key, interval);
+}
+
 // --- 8 Grouped Tools ---
 const tools = [
   {
@@ -195,6 +234,7 @@ const tools = [
         },
         scale_m: { type: 'number', description: 'Scale factor in meters (default: 1)' },
         save: { type: 'boolean', description: 'Save for future use (default: true)' },
+        duration_s: { type: 'number', description: 'Animation duration in seconds. If set, shape uses time variable and animates.' },
       },
       required: ['action'],
     },
@@ -326,6 +366,7 @@ async function executeTool(name, args) {
           return formatWithContext(`${target}: returning to launch`);
         }
         case 'emergency': {
+          stopAllAnimations();
           await backend.emergency(args.drone_id);
           return formatWithContext('EMERGENCY STOP executed');
         }
@@ -350,17 +391,35 @@ async function executeTool(name, args) {
       const droneIds = resolveTargetDrones(args, allDroneIds);
       const spacing = args.spacing_m || 5;
       let offsets;
+      let isAnimated = false;
+      
       // Try built-in formation first, then custom shapes
       try {
         offsets = resolveFormation(args.shape, droneIds.length, spacing);
       } catch {
-        offsets = resolveShape(args.shape, droneIds.length, spacing);
-        if (!offsets) {
+        const shape = getShape(args.shape);
+        if (!shape) {
           const builtIn = 'line, v, circle, ring, square, grid, column, echelon';
           const custom = listShapes();
           return `Unknown shape: "${args.shape}". Built-in: ${builtIn}. Custom: ${custom.length ? custom.join(', ') : 'none (create with drone_choreograph)'}`;
         }
+        
+        // Check if shape has time-dependent formulas (animated)
+        if (shape.duration_s) {
+          isAnimated = true;
+          const animKey = args.group || 'swarm';
+          startAnimation(animKey, shape, droneIds, spacing, backend);
+          if (args.group) {
+            groups.setGroupFormation(args.group, args.shape, spacing);
+            groups.setGroupTask(args.group, { type: 'animating', shape: args.shape, duration_s: shape.duration_s });
+          }
+          return formatWithContext(`${args.group || 'Swarm'}: ${args.shape} animated formation (${shape.duration_s}s), ${spacing}m spacing`);
+        }
+        
+        offsets = resolveShape(args.shape, droneIds.length, spacing);
+        if (!offsets) return `Failed to resolve shape "${args.shape}"`;
       }
+      
       if (args.modifier) {
         const mod = getModifier(args.modifier);
         if (!mod) return `Unknown modifier: ${args.modifier}`;
@@ -463,9 +522,15 @@ async function executeTool(name, args) {
         case 'create': {
           if (!args.name || !args.curves) return 'Need name and curves array';
           try {
-            const shape = createShape(args.name, args.curves, { scale: args.scale_m || 1, save: args.save !== false });
+            const shape = createShape(args.name, args.curves, { 
+              scale: args.scale_m || 1, 
+              save: args.save !== false,
+              duration_s: args.duration_s || null,
+              tick_ms: args.tick_ms || 100,
+            });
             const saved = args.save !== false ? ' (saved)' : '';
-            return formatWithContext(`Shape "${args.name}" created from ${args.curves.length} curve(s)${saved}. Use in drone_formation with shape="${args.name}".`);
+            const animated = shape.duration_s ? ` (animated: ${shape.duration_s}s)` : '';
+            return formatWithContext(`Shape "${args.name}" created from ${args.curves.length} curve(s)${saved}${animated}. Use in drone_formation with shape="${args.name}".`);
           } catch (err) {
             return `Error creating shape: ${err.message}`;
           }
