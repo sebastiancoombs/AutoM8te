@@ -198,6 +198,31 @@ const tools = [
         scale_m: { type: 'number', description: 'Scale factor in meters (default: 1)' },
         save: { type: 'boolean', description: 'Save for future use (default: true)' },
         duration_s: { type: 'number', description: 'Animation duration in seconds. If set, shape uses time variable and animates.' },
+        easing: { type: 'string', description: 'Easing function: linear, inOut, in, out, elastic, bounce, cubic, expo (default: inOut)' },
+        keyframes: {
+          type: 'array',
+          description: 'Array of shape keyframes for morphing animations. Each has "at" (0-1 normalized time) and "curves" (same format as top-level curves).',
+          items: {
+            type: 'object',
+            properties: {
+              at: { type: 'number', description: 'Time position 0-1 (0=start, 1=end)' },
+              curves: { type: 'array', description: 'Curves at this keyframe (same format as top-level curves)' },
+            },
+            required: ['at', 'curves'],
+          },
+        },
+        motion: {
+          type: 'object',
+          description: 'Motion path — moves the entire shape along a trajectory while maintaining formation.',
+          properties: {
+            path: { type: 'string', enum: ['circle', 'line', 'figure8'], description: 'Motion path type' },
+            radius_m: { type: 'number', description: 'Radius for circle/figure8 (default: 20)' },
+            distance_m: { type: 'number', description: 'Distance for line path' },
+            direction: { type: 'string', description: 'Direction for line path (north/south/east/west)' },
+            duration_s: { type: 'number', description: 'Time to complete one loop (default: 10)' },
+            rotate_with_path: { type: 'boolean', description: 'Rotate shape to face direction of travel (default: true)' },
+          },
+        },
       },
       required: ['action'],
     },
