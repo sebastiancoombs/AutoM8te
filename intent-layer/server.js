@@ -227,19 +227,12 @@ async function executeTool(name, args) {
 const TOOL_NAMES = ['drone_command', 'drone_move', 'drone_formation', 'drone_search', 'drone_follow', 'drone_query', 'drone_group', 'drone_modifier'];
 
 async function init() {
-  try {
-    console.error(`[AutoM8te] Connecting to backend: ${BACKEND} (${DRONE_COUNT} drones)...`);
-    await backend.connect();
-    console.error(`[AutoM8te] Backend connected!`);
-  } catch (err) {
-    console.error(`[AutoM8te] ⚠️  Backend connection failed: ${err.message}`);
-    console.error(`[AutoM8te] Falling back to mock adapter`);
-    backend = new MockAdapter(DRONE_COUNT);
-    await backend.connect();
-  }
+  console.error(`[AutoM8te] Connecting to backend: ${BACKEND} (${DRONE_COUNT} drones)...`);
+  await backend.connect();
+  console.error(`[AutoM8te] Backend connected: ${backend.constructor.name}`);
   await detector.start();
   groups.initialize([...(await backend.getDroneStates()).keys()]);
-  console.error(`[AutoM8te] Ready — Backend: ${backend.constructor.name}, Drones: ${DRONE_COUNT}`);
+  console.error(`[AutoM8te] Ready — ${DRONE_COUNT} drones`);
 }
 
 function parseBody(req) {
