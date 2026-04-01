@@ -295,7 +295,21 @@ export function createShape(name, curves, options = {}) {
   // If duration provided, mark as animated
   if (duration_s) {
     shape.duration_s = duration_s;
-    shape.tick_ms = tick_ms;
+  }
+
+  // Store keyframes if provided
+  if (options.keyframes) {
+    shape.keyframes = options.keyframes;
+  }
+
+  // Store motion path if provided
+  if (options.motion) {
+    shape.motion = options.motion;
+  }
+
+  // Store easing preference
+  if (options.easing) {
+    shape.easing = options.easing;
   }
 
   if (save) {
