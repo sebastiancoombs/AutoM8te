@@ -184,14 +184,19 @@ for i in $(seq 0 $((DRONE_COUNT - 1))); do
     fi
 done
 
-# Start intent layer with ArduPilot backend
-AUTOM8TE_BACKEND=ardupilot \
+# Start intent layer — use 'webots' backend when Webots is running, 'ardupilot' for headless
+if [ "$EXTRA_ARGS" = "--no-webots" ]; then
+    BACKEND_MODE="ardupilot"
+else
+    BACKEND_MODE="webots"
+fi
+AUTOM8TE_BACKEND="$BACKEND_MODE" \
 AUTOM8TE_DRONES="$DRONE_COUNT" \
 AUTOM8TE_MAVLINK_PORTS="$MAVLINK_PORTS" \
 AUTOM8TE_PORT=8080 \
 node "$INTENT_LAYER/server.js" &
 PIDS+=($!)
-echo -e "  ${GREEN}✓${NC} Intent layer started on port 8080 (PID ${PIDS[-1]})"
+echo -e "  ${GREEN}✓${NC} Intent layer started on port 8080 (backend: $BACKEND_MODE, PID ${PIDS[-1]})"
 
 echo
 echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
