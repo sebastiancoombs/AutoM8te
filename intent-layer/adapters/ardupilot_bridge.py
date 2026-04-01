@@ -39,8 +39,8 @@ class DroneConnection:
     def connect(self):
         """Connect to SITL instance"""
         try:
-            self.connection = mavutil.mavlink_connection(f'udp:127.0.0.1:{self.port}')
-            self.connection.wait_heartbeat(timeout=10)
+            self.connection = mavutil.mavlink_connection(f'tcp:127.0.0.1:{self.port}')
+            self.connection.wait_heartbeat(timeout=30)
             print(f"Connected to {self.drone_id} on port {self.port}", file=sys.stderr)
             return True
         except Exception as e:

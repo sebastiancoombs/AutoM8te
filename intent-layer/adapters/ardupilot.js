@@ -26,7 +26,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export class ArduPilotAdapter {
   constructor(options = {}) {
     this.droneCount = options.droneCount || 4;
-    this.basePort = options.basePort || 14550;
+    // SITL TCP ports: 5760 + instance*10
+    this.basePort = options.basePort || 5760;
     this.portStep = options.portStep || 10;
     this.backend = options.backend || 'default'; // 'default', 'webots', 'gazebo'
     this.ardupilotPath = options.ardupilotPath || null; // Path to ardupilot repo (required for webots)
@@ -108,7 +109,7 @@ export class ArduPilotAdapter {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Connection timeout'));
-      }, 30000);
+      }, 60000);
 
       const checkConnected = () => {
         if (this.drones.size >= this.droneCount) {

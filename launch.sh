@@ -137,7 +137,23 @@ done
 
 # Wait for SITLs to bind their ports
 echo -e "  Waiting for SITL instances to initialize..."
-sleep 3
+sleep 5
+
+# Verify SITL TCP ports are listening
+echo -e "  Checking SITL ports..."
+for i in $(seq 0 $((DRONE_COUNT - 1))); do
+    INSTANCE_PORT=$((SITL_BASE_PORT + i * 10))
+    RETRIES=10
+    while ! lsof -i ":$INSTANCE_PORT" -sTCP:LISTEN >/dev/null 2>&1 && [ $RETRIES -gt 0 ]; do
+        sleep 1
+        RETRIES=$((RETRIES - 1))
+    done
+    if lsof -i ":$INSTANCE_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} SITL $i listening on TCP $INSTANCE_PORT"
+    else
+        echo -e "  ${RED}✗${NC} SITL $i NOT listening on TCP $INSTANCE_PORT — check .sitl-logs/sitl_$i.log"
+    fi
+done
 
 # Verify SITLs are running
 RUNNING=0
@@ -173,10 +189,11 @@ if [ ! -d "$INTENT_LAYER/node_modules" ] || [ "$INTENT_LAYER/package.json" -nt "
     (cd "$INTENT_LAYER" && npm install --silent)
 fi
 
-# Build MAVLink port list for the bridge
+# Build SITL TCP port list for the bridge
+# Raw arducopter binary listens on TCP 5760 + instance*10
 MAVLINK_PORTS=""
 for i in $(seq 0 $((DRONE_COUNT - 1))); do
-    PORT=$((MAVLINK_BASE_PORT + i * 10))
+    PORT=$((SITL_BASE_PORT + i * 10))
     if [ -z "$MAVLINK_PORTS" ]; then
         MAVLINK_PORTS="$PORT"
     else
