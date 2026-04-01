@@ -276,5 +276,129 @@
       "radius_m": 25,
       "rotate_with_path": true
     }
+  },
+  "pyramid": {
+    "name": "pyramid",
+    "curves": [
+      {
+        "equation": "line",
+        "start": [
+          -10,
+          -10,
+          0
+        ],
+        "end": [
+          10,
+          -10,
+          0
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          10,
+          -10,
+          0
+        ],
+        "end": [
+          10,
+          10,
+          0
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          10,
+          10,
+          0
+        ],
+        "end": [
+          -10,
+          10,
+          0
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          -10,
+          10,
+          0
+        ],
+        "end": [
+          -10,
+          -10,
+          0
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          -5,
+          -5,
+          10
+        ],
+        "end": [
+          5,
+          -5,
+          10
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          5,
+          -5,
+          10
+        ],
+        "end": [
+          5,
+          5,
+          10
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          5,
+          5,
+          10
+        ],
+        "end": [
+          -5,
+          5,
+          10
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          -5,
+          5,
+          10
+        ],
+        "end": [
+          -5,
+          -5,
+          10
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          0,
+          0,
+          20
+        ],
+        "end": [
+          0,
+          0,
+          20
+        ]
+      }
+    ],
+    "scale": 1,
+    "created": "2026-04-01T14:25:40.099Z"
   }
 }

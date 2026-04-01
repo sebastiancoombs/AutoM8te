@@ -99,7 +99,7 @@ const tools = [
     inputSchema: {
       type: 'object',
       properties: {
-        shape: { type: 'string', enum: ['line', 'v', 'circle', 'ring', 'square', 'grid', 'column', 'echelon'], description: 'Formation shape' },
+        shape: { type: 'string', description: 'Formation shape. Built-in: line, v, circle, ring, square, grid, column, echelon. Also accepts any custom shape name from drone_choreograph.' },
         spacing_m: { type: 'number', description: 'Spacing in meters (default: 5)' },
         group: { type: 'string', description: 'Target group (omit for all)' },
         modifier: { type: 'string', description: 'Movement modifier: snake, wave, pulse, breathe, orbit, weave' },
