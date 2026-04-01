@@ -193,6 +193,21 @@ export class SwarmBackend {
     throw new Error('Not implemented');
   }
 
+  // --- Choreography ---
+
+  /**
+   * Execute a choreography — shape with optional animation/motion.
+   * Backend handles path planning, easing, and waypoint dispatch.
+   * 
+   * @param {object} shape - Shape object from shapes.js (curves, keyframes, motion, duration_s, easing)
+   * @param {string[]} droneIds - Target drone IDs
+   * @param {number} scale - Spacing/scale factor
+   * @returns {Promise<{dispatched: number, duration_s: number}>}
+   */
+  async executeChoreography(shape, droneIds, scale = 5) {
+    throw new Error('Not implemented');
+  }
+
   // --- Perception (Phase 3) ---
   
   /**

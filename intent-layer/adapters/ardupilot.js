@@ -318,4 +318,36 @@ export class ArduPilotAdapter {
       speed,
     });
   }
+
+  async executeChoreography(shape, droneIds, scale = 5) {
+    const { planKeyframePaths, planAnimatedPaths, planMotionPath, pathsToWaypoints } = await import('./pathplanner.js');
+    const { resolveCurves } = await import('../lookups/shapes.js');
+
+    let paths;
+    if (shape.keyframes) {
+      paths = planKeyframePaths(shape.keyframes, droneIds.length, {
+        duration_s: shape.duration_s, easing: shape.easing || 'inOut', scale,
+      });
+    } else if (shape.duration_s && shape.curves) {
+      paths = planAnimatedPaths(shape.curves, droneIds.length, {
+        duration_s: shape.duration_s, scale, easing: shape.easing || 'linear',
+      });
+    }
+
+    if (shape.motion && shape.curves) {
+      const staticOffsets = resolveCurves(shape.curves, droneIds.length, scale);
+      paths = planMotionPath(staticOffsets, shape.motion);
+    }
+
+    if (!paths) return { dispatched: 0, duration_s: 0 };
+
+    const waypointData = pathsToWaypoints(paths);
+    for (const [droneId, { waypoints, speeds }] of waypointData) {
+      const avgSpeed = speeds.length > 0 ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 5;
+      await this.followPath(droneId, waypoints, Math.min(avgSpeed, 15));
+    }
+
+    console.log(`[ArduPilot] Choreography dispatched to ${waypointData.size} drones`);
+    return { dispatched: waypointData.size, duration_s: shape.duration_s || 0 };
+  }
 }

@@ -11,7 +11,7 @@
 import { Easing } from '@tweenjs/tween.js';
 import flubber from 'flubber';
 const { interpolate } = flubber;
-import { resolveCurves } from './shapes.js';
+import { resolveCurves } from '../lookups/shapes.js';
 
 // --- Easing Presets ---
 

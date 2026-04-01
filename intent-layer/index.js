@@ -14,7 +14,6 @@ import {
   defineModifier, getModifier, listModifiers, applyModifierToFormation,
 } from './lookups/modifiers.js';
 import { createShape, getShape, listShapes, deleteShape, resolveShape, resolveCurves } from './lookups/shapes.js';
-import { planKeyframePaths, planAnimatedPaths, planMotionPath, pathsToWaypoints } from './lookups/pathplanner.js';
 import { MockDetector } from './perception/detector.js';
 import { GroupManager } from './state/groups.js';
 import { MockAdapter } from './adapters/mock.js';
@@ -60,19 +59,7 @@ switch (BACKEND) {
 // --- Group Manager ---
 const groups = new GroupManager();
 
-// --- Path Dispatch ---
-// Converts planned paths into backend followPath calls (fire and forget)
-
-async function dispatchPaths(paths, backend) {
-  const waypointData = pathsToWaypoints(paths);
-  const promises = [];
-  for (const [droneId, { waypoints, speeds }] of waypointData) {
-    const avgSpeed = speeds.length > 0 ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 5;
-    promises.push(backend.followPath(droneId, waypoints, Math.min(avgSpeed, 15)));
-  }
-  await Promise.all(promises);
-  return waypointData.size;
-}
+// --- (path planning delegated to backend adapters) ---
 
 // --- 8 Grouped Tools ---
 const tools = [
@@ -378,31 +365,14 @@ async function executeTool(name, args) {
           return `Unknown shape: "${args.shape}". Built-in: ${builtIn}. Custom: ${custom.length ? custom.join(', ') : 'none (create with drone_choreograph)'}`;
         }
         
-        // Animated shape — generate per-drone paths and dispatch
-        if (shape.duration_s) {
-          let paths;
-          if (shape.keyframes) {
-            paths = planKeyframePaths(shape.keyframes, droneIds.length, {
-              duration_s: shape.duration_s, easing: shape.easing || 'inOut', scale: spacing,
-            });
-          } else {
-            paths = planAnimatedPaths(shape.curves, droneIds.length, {
-              duration_s: shape.duration_s, scale: spacing, easing: shape.easing || 'linear',
-            });
-          }
-          // Apply motion path if present
-          if (shape.motion) {
-            const staticOffsets = resolveCurves(shape.curves, droneIds.length, spacing);
-            const motionPaths = planMotionPath(staticOffsets, shape.motion);
-            // Merge: for now motion path takes priority
-            paths = motionPaths;
-          }
-          const count = await dispatchPaths(paths, backend);
+        // Animated shape — delegate to backend
+        if (shape.duration_s || shape.keyframes || shape.motion) {
+          const result = await backend.executeChoreography(shape, droneIds, spacing);
           if (args.group) {
             groups.setGroupFormation(args.group, args.shape, spacing);
-            groups.setGroupTask(args.group, { type: 'following path', shape: args.shape, duration_s: shape.duration_s });
+            groups.setGroupTask(args.group, { type: 'choreography', shape: args.shape, duration_s: shape.duration_s });
           }
-          return formatWithContext(`${args.group || 'Swarm'}: ${args.shape} path dispatched to ${count} drones (${shape.duration_s}s)`);
+          return formatWithContext(`${args.group || 'Swarm'}: ${args.shape} dispatched to ${result.dispatched} drones (${result.duration_s}s)`);
         }
         
         offsets = resolveShape(args.shape, droneIds.length, spacing);
