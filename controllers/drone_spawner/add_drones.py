@@ -26,6 +26,8 @@ DRONE_TEMPLATE = """DEF DRONE_{id} Iris {{
   controllerArgs [
     "--motors"
     "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--instance"
+    "{id}"
     "--camera"
     "camera"
     "--camera-port"
