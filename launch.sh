@@ -190,10 +190,10 @@ if [ ! -d "$INTENT_LAYER/node_modules" ] || [ "$INTENT_LAYER/package.json" -nt "
 fi
 
 # Build SITL TCP port list for the bridge
-# Raw arducopter binary listens on TCP 5760 + instance*10
+# SERIAL0 (5760) is used by Webots controller, use SERIAL1 (5762) for MAVLink bridge
 MAVLINK_PORTS=""
 for i in $(seq 0 $((DRONE_COUNT - 1))); do
-    PORT=$((SITL_BASE_PORT + i * 10))
+    PORT=$((SITL_BASE_PORT + i * 10 + 2))  # +2 = SERIAL1 port
     if [ -z "$MAVLINK_PORTS" ]; then
         MAVLINK_PORTS="$PORT"
     else

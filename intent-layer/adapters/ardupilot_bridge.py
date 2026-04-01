@@ -36,16 +36,27 @@ class DroneConnection:
         self.battery = 100
         self.home = None
         
-    def connect(self):
-        """Connect to SITL instance"""
-        try:
-            self.connection = mavutil.mavlink_connection(f'tcp:127.0.0.1:{self.port}')
-            self.connection.wait_heartbeat(timeout=30)
-            print(f"Connected to {self.drone_id} on port {self.port}", file=sys.stderr)
-            return True
-        except Exception as e:
-            print(f"Failed to connect to port {self.port}: {e}", file=sys.stderr)
-            return False
+    def connect(self, retries=10, delay=3):
+        """Connect to SITL instance with retries"""
+        for attempt in range(retries):
+            try:
+                print(f"Connecting to {self.drone_id} on tcp:127.0.0.1:{self.port} (attempt {attempt+1}/{retries})...", file=sys.stderr)
+                self.connection = mavutil.mavlink_connection(f'tcp:127.0.0.1:{self.port}')
+                self.connection.wait_heartbeat(timeout=15)
+                print(f"Connected to {self.drone_id} on port {self.port}", file=sys.stderr)
+                return True
+            except Exception as e:
+                print(f"Attempt {attempt+1} failed for {self.drone_id} port {self.port}: {e}", file=sys.stderr)
+                if self.connection:
+                    try:
+                        self.connection.close()
+                    except:
+                        pass
+                    self.connection = None
+                if attempt < retries - 1:
+                    time.sleep(delay)
+        print(f"Failed to connect to {self.drone_id} after {retries} attempts", file=sys.stderr)
+        return False
     
     def arm_and_takeoff(self, altitude, speed=2):
         """Arm and takeoff to altitude"""
