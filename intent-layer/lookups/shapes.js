@@ -18,86 +18,92 @@ const LIBRARY_PATH = join(__dirname, '..', 'data', 'shapes.json');
 // --- Curve Evaluators ---
 
 /**
- * Sample points along a parametric curve: x(t), y(t)
+ * Sample points along a parametric curve: x(t), y(t), optional z(t)
+ * Supports `time` variable for animated shapes.
  */
-function sampleParametric(curve, numPoints) {
-  const { x: xExpr, y: yExpr, t: tRange } = curve;
+function sampleParametric(curve, numPoints, time = 0) {
+  const { x: xExpr, y: yExpr, z: zExpr, t: tRange } = curve;
   const [tMin, tMax] = tRange || [0, 2 * Math.PI];
   const points = [];
 
   for (let i = 0; i < numPoints; i++) {
     const t = tMin + (i / (numPoints - 1 || 1)) * (tMax - tMin);
-    const x = evalMathExpr(xExpr, { t });
-    const y = evalMathExpr(yExpr, { t });
-    if (isFinite(x) && isFinite(y)) {
-      points.push([x, y, 0]);
+    const vars = { t, time };
+    const x = evalMathExpr(xExpr, vars);
+    const y = evalMathExpr(yExpr, vars);
+    const z = zExpr ? evalMathExpr(zExpr, vars) : 0;
+    if (isFinite(x) && isFinite(y) && isFinite(z)) {
+      points.push([x, y, z]);
     }
   }
   return points;
 }
 
 /**
- * Sample points along a polar curve: r(theta)
+ * Sample points along a polar curve: r(theta), optional z(theta)
  */
-function samplePolar(curve, numPoints) {
-  const { r: rExpr, theta: thetaRange } = curve;
+function samplePolar(curve, numPoints, time = 0) {
+  const { r: rExpr, z: zExpr, theta: thetaRange } = curve;
   const [tMin, tMax] = thetaRange || [0, 2 * Math.PI];
   const points = [];
 
   for (let i = 0; i < numPoints; i++) {
     const theta = tMin + (i / (numPoints - 1 || 1)) * (tMax - tMin);
-    const r = evalMathExpr(rExpr, { theta, t: theta });
-    if (isFinite(r)) {
-      points.push([r * Math.cos(theta), r * Math.sin(theta), 0]);
+    const vars = { theta, t: theta, time };
+    const r = evalMathExpr(rExpr, vars);
+    const z = zExpr ? evalMathExpr(zExpr, vars) : 0;
+    if (isFinite(r) && isFinite(z)) {
+      points.push([r * Math.cos(theta), r * Math.sin(theta), z]);
     }
   }
   return points;
 }
 
 /**
- * Sample points along a circle
+ * Sample points along a circle (3D: z from center)
  */
 function sampleCircle(curve, numPoints) {
   const { radius, center } = curve;
-  const [cx, cy] = center || [0, 0];
+  const [cx, cy, cz] = center || [0, 0, 0];
   const points = [];
 
   for (let i = 0; i < numPoints; i++) {
     const angle = (i / numPoints) * 2 * Math.PI;
-    points.push([cx + radius * Math.cos(angle), cy + radius * Math.sin(angle), 0]);
+    points.push([cx + radius * Math.cos(angle), cy + radius * Math.sin(angle), cz || 0]);
   }
   return points;
 }
 
 /**
- * Sample points along an arc
+ * Sample points along an arc (3D: z from center)
  */
 function sampleArc(curve, numPoints) {
   const { radius, center, start_angle, end_angle } = curve;
-  const [cx, cy] = center || [0, 0];
+  const [cx, cy, cz] = center || [0, 0, 0];
   const startRad = (start_angle || 0) * Math.PI / 180;
   const endRad = (end_angle || 360) * Math.PI / 180;
   const points = [];
 
   for (let i = 0; i < numPoints; i++) {
     const angle = startRad + (i / (numPoints - 1 || 1)) * (endRad - startRad);
-    points.push([cx + radius * Math.cos(angle), cy + radius * Math.sin(angle), 0]);
+    points.push([cx + radius * Math.cos(angle), cy + radius * Math.sin(angle), cz || 0]);
   }
   return points;
 }
 
 /**
- * Sample points along a line segment
+ * Sample points along a line segment (3D)
  */
 function sampleLine(curve, numPoints) {
   const { start, end } = curve;
+  const sz = start[2] || 0, ez = end[2] || 0;
   const points = [];
   for (let i = 0; i < numPoints; i++) {
     const t = i / (numPoints - 1 || 1);
     points.push([
       start[0] + t * (end[0] - start[0]),
       start[1] + t * (end[1] - start[1]),
-      0,
+      sz + t * (ez - sz),
     ]);
   }
   return points;
@@ -123,9 +129,10 @@ function sampleBezier(curve, numPoints) {
     }
   }
 
-  // Create Bezier objects and sample
+  // Create Bezier objects and sample (3D if z provided)
+  const is3D = controlPoints.some(p => p.length > 2 && p[2] !== 0);
   const beziers = segments.map(seg => {
-    const coords = seg.map(p => ({ x: p[0], y: p[1] }));
+    const coords = seg.map(p => is3D ? ({ x: p[0], y: p[1], z: p[2] || 0 }) : ({ x: p[0], y: p[1] }));
     return new Bezier(coords);
   });
 
@@ -140,7 +147,7 @@ function sampleBezier(curve, numPoints) {
     for (let j = 0; j < n; j++) {
       const t = j / (n - 1 || 1);
       const pt = beziers[i].get(t);
-      result.push([pt.x, pt.y, 0]);
+      result.push([pt.x, pt.y, pt.z || 0]);
     }
   }
 
@@ -162,12 +169,12 @@ const CURVE_SAMPLERS = {
   bezier: sampleBezier,
 };
 
-function sampleCurve(curve, numPoints) {
+function sampleCurve(curve, numPoints, time = 0) {
   const sampler = CURVE_SAMPLERS[curve.equation];
   if (!sampler) {
     throw new Error(`Unknown curve type: ${curve.equation}. Available: ${Object.keys(CURVE_SAMPLERS).join(', ')}`);
   }
-  return sampler(curve, numPoints);
+  return sampler(curve, numPoints, time);
 }
 
 // --- Math Expression Evaluator (mathjs) ---
@@ -186,10 +193,10 @@ function evalMathExpr(expr, vars) {
  * Given multiple curves, distribute N drones across them
  * proportional to each curve's approximate length
  */
-function distributeDrones(curves, totalDrones, scale = 1) {
+function distributeDrones(curves, totalDrones, scale = 1, time = 0) {
   // Sample each curve densely to estimate length
   const curveLengths = curves.map(curve => {
-    const pts = sampleCurve(curve, 100);
+    const pts = sampleCurve(curve, 100, time);
     let len = 0;
     for (let i = 1; i < pts.length; i++) {
       const dx = pts[i][0] - pts[i - 1][0];
@@ -223,7 +230,7 @@ function distributeDrones(curves, totalDrones, scale = 1) {
   // Sample final points
   const allPoints = [];
   for (let i = 0; i < curves.length; i++) {
-    const pts = sampleCurve(curves[i], dronesPerCurve[i]);
+    const pts = sampleCurve(curves[i], dronesPerCurve[i], time);
     allPoints.push(...pts);
   }
 
@@ -323,17 +330,17 @@ export function deleteShape(name) {
 /**
  * Resolve a shape to drone offsets (like resolveFormation)
  */
-export function resolveShape(name, droneCount, scale = 1) {
+export function resolveShape(name, droneCount, scale = 1, time = 0) {
   const shape = getShape(name);
   if (!shape) return null;
-  return distributeDrones(shape.curves, droneCount, scale * (shape.scale || 1));
+  return distributeDrones(shape.curves, droneCount, scale * (shape.scale || 1), time);
 }
 
 /**
  * Resolve arbitrary curves to drone offsets (for one-off shapes)
  */
-export function resolveCurves(curves, droneCount, scale = 1) {
-  return distributeDrones(curves, droneCount, scale);
+export function resolveCurves(curves, droneCount, scale = 1, time = 0) {
+  return distributeDrones(curves, droneCount, scale, time);
 }
 
 // Export for testing

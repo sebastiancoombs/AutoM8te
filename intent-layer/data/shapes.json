@@ -141,5 +141,22 @@
     ],
     "scale": 1,
     "created": "2026-04-01T13:35:48.629Z"
+  },
+  "helix": {
+    "name": "helix",
+    "curves": [
+      {
+        "equation": "parametric",
+        "x": "10*cos(t)",
+        "y": "10*sin(t)",
+        "z": "t*2",
+        "t": [
+          0,
+          12.56
+        ]
+      }
+    ],
+    "scale": 1,
+    "created": "2026-04-01T13:39:45.049Z"
   }
 }
