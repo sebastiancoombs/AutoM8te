@@ -10,6 +10,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { evaluate } from 'mathjs';
+import { Bezier } from 'bezier-js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LIBRARY_PATH = join(__dirname, '..', 'data', 'shapes.json');
@@ -103,30 +104,50 @@ function sampleLine(curve, numPoints) {
 }
 
 /**
- * Sample points along a cubic Bezier curve (or chain of bezier segments)
+ * Sample points along Bezier curve(s) using bezier-js
+ * Supports 2-4 control points per segment. For 5+ points, splits into chained cubic segments.
  */
 function sampleBezier(curve, numPoints) {
   const { points: controlPoints } = curve;
   if (!controlPoints || controlPoints.length < 2) return [];
 
-  // For a simple polyline through control points, use De Casteljau
-  const result = [];
-  const n = controlPoints.length - 1;
-
-  for (let i = 0; i < numPoints; i++) {
-    const t = i / (numPoints - 1 || 1);
-    // De Casteljau's algorithm
-    let pts = controlPoints.map(p => [...p]);
-    for (let k = 1; k <= n; k++) {
-      for (let j = 0; j <= n - k; j++) {
-        pts[j] = [
-          (1 - t) * pts[j][0] + t * pts[j + 1][0],
-          (1 - t) * pts[j][1] + t * pts[j + 1][1],
-        ];
-      }
+  // Split into cubic bezier segments (max 4 control points each)
+  const segments = [];
+  if (controlPoints.length <= 4) {
+    segments.push(controlPoints);
+  } else {
+    // Chain cubic segments: every 3 new points after the first
+    for (let i = 0; i < controlPoints.length - 1; i += 3) {
+      const seg = controlPoints.slice(i, i + 4);
+      if (seg.length >= 2) segments.push(seg);
     }
-    result.push([pts[0][0], pts[0][1], 0]);
   }
+
+  // Create Bezier objects and sample
+  const beziers = segments.map(seg => {
+    const coords = seg.map(p => ({ x: p[0], y: p[1] }));
+    return new Bezier(coords);
+  });
+
+  // Distribute points proportionally by arc length
+  const lengths = beziers.map(b => b.length());
+  const totalLength = lengths.reduce((a, b) => a + b, 0);
+  if (totalLength === 0) return [];
+
+  const result = [];
+  for (let i = 0; i < beziers.length; i++) {
+    const n = Math.max(1, Math.round((lengths[i] / totalLength) * numPoints));
+    for (let j = 0; j < n; j++) {
+      const t = j / (n - 1 || 1);
+      const pt = beziers[i].get(t);
+      result.push([pt.x, pt.y, 0]);
+    }
+  }
+
+  // Trim or pad to exact numPoints
+  while (result.length > numPoints) result.pop();
+  while (result.length < numPoints) result.push(result[result.length - 1]);
+
   return result;
 }
 
