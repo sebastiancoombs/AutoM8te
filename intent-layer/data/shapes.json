@@ -1,0 +1,71 @@
+{
+  "heart": {
+    "name": "heart",
+    "curves": [
+      {
+        "equation": "parametric",
+        "x": "16 * sin(t)^3",
+        "y": "13*cos(t) - 5*cos(2*t) - 2*cos(3*t) - cos(4*t)",
+        "t": [
+          0,
+          6.28
+        ]
+      }
+    ],
+    "scale": 1,
+    "created": "2026-04-01T13:15:46.213Z"
+  },
+  "smiley": {
+    "name": "smiley",
+    "curves": [
+      {
+        "equation": "circle",
+        "radius": 10
+      },
+      {
+        "equation": "circle",
+        "radius": 1.5,
+        "center": [
+          -3,
+          3
+        ]
+      },
+      {
+        "equation": "circle",
+        "radius": 1.5,
+        "center": [
+          3,
+          3
+        ]
+      },
+      {
+        "equation": "arc",
+        "radius": 6,
+        "center": [
+          0,
+          0
+        ],
+        "start_angle": 200,
+        "end_angle": 340
+      }
+    ],
+    "scale": 1,
+    "created": "2026-04-01T13:16:26.593Z"
+  },
+  "heart2": {
+    "name": "heart2",
+    "curves": [
+      {
+        "equation": "parametric",
+        "x": "16 * sin(t)^3",
+        "y": "13*cos(t) - 5*cos(2*t) - 2*cos(3*t) - cos(4*t)",
+        "t": [
+          0,
+          6.28
+        ]
+      }
+    ],
+    "scale": 1,
+    "created": "2026-04-01T13:19:45.736Z"
+  }
+}

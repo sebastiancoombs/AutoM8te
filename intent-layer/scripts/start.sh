@@ -44,7 +44,7 @@ case $BACKEND in
         echo "This is instant — no external dependencies."
         echo ""
         cd "$INTENT_LAYER_DIR"
-        AUTOM8TE_BACKEND=mock AUTOM8TE_DRONES=$DRONE_COUNT node index.js
+        AUTOM8TE_BACKEND=mock AUTOM8TE_DRONES=$DRONE_COUNT node server.js
         ;;
         
     ardupilot)
@@ -97,7 +97,7 @@ case $BACKEND in
         
         echo -e "${GREEN}Starting intent layer...${NC}"
         cd "$INTENT_LAYER_DIR"
-        AUTOM8TE_BACKEND=ardupilot AUTOM8TE_DRONES=$DRONE_COUNT node index.js
+        AUTOM8TE_BACKEND=ardupilot AUTOM8TE_DRONES=$DRONE_COUNT node server.js
         ;;
         
     webots)
@@ -141,6 +141,18 @@ case $BACKEND in
         pkill -f sim_vehicle.py 2>/dev/null || true
         sleep 1
         
+        # Inject drones into world file
+        DRONE_SPAWNER="$AUTOM8TE_ROOT/controllers/drone_spawner/add_drones.py"
+        if [ -f "$DRONE_SPAWNER" ]; then
+            echo -e "${GREEN}Injecting $DRONE_COUNT drones into world...${NC}"
+            python3 "$DRONE_SPAWNER" \
+                --count "$DRONE_COUNT" \
+                --world "$WEBOTS_WORLD"
+        else
+            echo -e "${RED}Error: drone spawner not found at $DRONE_SPAWNER${NC}"
+            exit 1
+        fi
+        
         # Launch Webots with our city world
         echo -e "${GREEN}Opening Webots with AutoM8te city...${NC}"
         if [ -d "/Applications/Webots.app" ]; then
@@ -161,7 +173,8 @@ case $BACKEND in
             PORT=$((BASE_PORT + i * PORT_STEP))
             PORTS="${PORTS}${PORT},"
             
-            echo "  Starting SITL drone$i → port $PORT (webots-python model)..."
+            echo "  Starting SITL drone$i → port $PORT (webots-python model, robot=drone_$i)..."
+            WEBOTS_ROBOT_NAME="drone_$i" \
             sim_vehicle.py -v ArduCopter \
                 --model webots-python \
                 --instance $i \
@@ -169,6 +182,7 @@ case $BACKEND in
                 --out udp:127.0.0.1:$PORT \
                 --add-param-file="$IRIS_PARM" \
                 --no-mavproxy \
+                --no-rebuild \
                 > /tmp/sitl_drone${i}.log 2>&1 &
         done
         PORTS=${PORTS%,}
@@ -178,11 +192,11 @@ case $BACKEND in
         echo "Check Webots console for 'Connected to ardupilot SITL' messages."
         sleep 20
         
-        echo -e "${GREEN}Starting intent layer...${NC}"
+        echo -e "${GREEN}Starting intent layer HTTP server...${NC}"
         cd "$INTENT_LAYER_DIR"
         AUTOM8TE_BACKEND=ardupilot \
         AUTOM8TE_DRONES=$DRONE_COUNT \
-        node index.js
+        node server.js
         ;;
         
     pybullet)
@@ -199,7 +213,7 @@ case $BACKEND in
         AUTOM8TE_BACKEND=pybullet \
         AUTOM8TE_DRONES=$DRONE_COUNT \
         AUTOM8TE_GUI=${AUTOM8TE_GUI:-true} \
-        node index.js
+        node server.js
         ;;
         
     *)
