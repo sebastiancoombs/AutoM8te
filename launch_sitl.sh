@@ -32,6 +32,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+mkdir -p "$SCRIPT_DIR/logs"
+
 echo -e "${CYAN}╔══════════════════════════════════════╗${NC}"
 echo -e "${CYAN}║   AutoM8te — SITL Mode               ║${NC}"
 echo -e "${CYAN}║   Drones: $DRONE_COUNT (ArduPilot + Webots physics) ║${NC}"
@@ -63,7 +65,7 @@ for i in $(seq 0 $((DRONE_COUNT - 1))); do
         --no-rebuild \
         --no-mavproxy \
         --add-param-file="$PARAMS_FILE" \
-        > /tmp/sitl_instance_$i.log 2>&1 &
+        > "$SCRIPT_DIR/logs/sitl_instance_$i.log" 2>&1 &
     PIDS+=($!)
     cd "$SCRIPT_DIR"
 
@@ -107,7 +109,8 @@ fi
 # ─── Step 5: Start DroneKit Bridge ──────────────────────────────────
 echo -e "${CYAN}[5/6] Starting DroneKit Bridge on :8080...${NC}"
 cd "$SCRIPT_DIR"
-python3 dronekit_bridge.py --drones "$DRONE_COUNT" --base-port 5760 --http-port 8070 &
+python3 dronekit_bridge.py --drones "$DRONE_COUNT" --base-port 5760 --http-port 8070 \
+    > "$SCRIPT_DIR/logs/bridge.log" 2>&1 &
 PIDS+=($!)
 echo "  Waiting 60s for DroneKit to connect to all SITL instances..."
 sleep 60
@@ -115,7 +118,8 @@ sleep 60
 # ─── Step 6: Start Intent Layer ──────────────────────────────────────
 echo -e "${CYAN}[6/6] Starting Intent Layer on :9090...${NC}"
 cd "$SCRIPT_DIR/intent-layer"
-AUTOM8TE_BACKEND=dronekit AUTOM8TE_DRONES=$DRONE_COUNT node server.js &
+AUTOM8TE_BACKEND=dronekit AUTOM8TE_DRONES=$DRONE_COUNT node server.js \
+    > "$SCRIPT_DIR/logs/intent_layer.log" 2>&1 &
 PIDS+=($!)
 cd "$SCRIPT_DIR"
 
