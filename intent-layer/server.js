@@ -20,6 +20,7 @@ import { MockAdapter } from './adapters/mock.js';
 import { Aerostack2Adapter } from './adapters/aerostack2.js';
 import { PyBulletAdapter } from './adapters/pybullet.js';
 import { ArduPilotAdapter } from './adapters/ardupilot.js';
+import { SupervisorAdapter } from './adapters/supervisor.js';
 
 // --- Config ---
 const PORT = parseInt(process.env.AUTOM8TE_PORT || '8080', 10);
@@ -39,6 +40,9 @@ if (PERCEPTION === 'yolo') {
 // --- Backend ---
 let backend;
 switch (BACKEND) {
+  case 'supervisor':
+    backend = new SupervisorAdapter({ droneCount: DRONE_COUNT });
+    break;
   case 'webots':
     backend = new ArduPilotAdapter({ droneCount: DRONE_COUNT, backend: 'webots' });
     break;

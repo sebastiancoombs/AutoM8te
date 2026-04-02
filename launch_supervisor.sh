@@ -56,12 +56,36 @@ echo
 "$WEBOTS_BIN" "$WORLD_FILE" &
 WEBOTS_PID=$!
 
+# Wait for Supervisor API to come up
+echo "  Waiting for Supervisor API..."
+for i in $(seq 1 20); do
+    if curl -s http://localhost:8080/api/status >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} Supervisor API ready"
+        break
+    fi
+    sleep 1
+done
+
+# Start intent layer with supervisor backend (port 9090 to avoid conflict with supervisor on 8080)
+INTENT_LAYER="$SCRIPT_DIR/intent-layer"
+if [ -d "$INTENT_LAYER" ]; then
+    echo -e "${CYAN}[3/3] Starting intent layer (formations, paths, groups)...${NC}"
+    (cd "$INTENT_LAYER" && npm install --silent 2>/dev/null)
+    AUTOM8TE_BACKEND=supervisor \
+    AUTOM8TE_DRONES="$DRONE_COUNT" \
+    AUTOM8TE_PORT=9090 \
+    node "$INTENT_LAYER/server.js" &
+    INTENT_PID=$!
+    echo -e "  ${GREEN}✓${NC} Intent layer on port 9090 (formations, choreography, groups)"
+fi
+
 echo
 echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║   AutoM8te is running!               ║${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║   Drones:  $DRONE_COUNT                          ║${NC}"
-echo -e "${GREEN}║   API:     http://localhost:8080      ║${NC}"
+echo -e "${GREEN}║   Control: http://localhost:8080      ║${NC}"
+echo -e "${GREEN}║   Intent:  http://localhost:9090      ║${NC}"
 echo -e "${GREEN}║   Backend: Webots Supervisor          ║${NC}"
 echo -e "${GREEN}║   Physics: Single engine (fast!)      ║${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════╣${NC}"

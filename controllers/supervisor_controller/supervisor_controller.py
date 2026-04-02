@@ -31,11 +31,14 @@ class DroneState:
         self.node = node
         self.trans_field = trans_field
         self.rot_field = rot_field
-        self.target = None          # Target position [x, y, z]
+        self.target = None          # Current target position [x, y, z]
+        self.path = []              # Queue of waypoints [[x,y,z], ...]
+        self.path_index = 0         # Current waypoint in path
+        self.path_loop = False      # Loop back to start when done
         self.velocity = [0, 0, 0]
         self.speed = 5.0            # m/s
         self.armed = False
-        self.mode = "IDLE"          # IDLE, GUIDED, LANDING, HOVER
+        self.mode = "IDLE"          # IDLE, GUIDED, LANDING, HOVER, FOLLOWING_PATH
 
     @property
     def position(self):
@@ -45,8 +48,35 @@ class DroneState:
     def position(self, pos):
         self.trans_field.setSFVec3f(pos)
 
-    def move_toward_target(self, dt):
-        """Move drone toward target position at configured speed."""
+    def set_path(self, waypoints, speed=5.0, loop=False):
+        """Set a path of waypoints to follow."""
+        self.path = waypoints
+        self.path_index = 0
+        self.path_loop = loop
+        self.speed = speed
+        if waypoints:
+            self.target = waypoints[0]
+            self.mode = "FOLLOWING_PATH"
+        else:
+            self.target = None
+
+    def _advance_path(self):
+        """Move to next waypoint in path."""
+        self.path_index += 1
+        if self.path_index < len(self.path):
+            self.target = self.path[self.path_index]
+        elif self.path_loop and self.path:
+            self.path_index = 0
+            self.target = self.path[0]
+        else:
+            # Path complete
+            self.target = None
+            self.path = []
+            self.path_index = 0
+            self.mode = "HOVER"
+
+    def tick(self, dt):
+        """Main update — move toward current target, advance path when reached."""
         if self.target is None or not self.armed:
             self.velocity = [0, 0, 0]
             return
@@ -57,11 +87,27 @@ class DroneState:
         dz = self.target[2] - pos[2]
         dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
-        if dist < 0.3:
-            # Arrived
-            self.velocity = [0, 0, 0]
-            self.mode = "HOVER"
-            return
+        # Waypoint reached threshold — tighter for paths, looser for single targets
+        threshold = 0.5 if self.path else 0.3
+
+        if dist < threshold:
+            if self.path:
+                self._advance_path()
+                if self.target is None:
+                    self.velocity = [0, 0, 0]
+                    return
+                # Recalculate toward new target
+                pos = self.position
+                dx = self.target[0] - pos[0]
+                dy = self.target[1] - pos[1]
+                dz = self.target[2] - pos[2]
+                dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                if dist < 0.1:
+                    return
+            else:
+                self.velocity = [0, 0, 0]
+                self.mode = "HOVER"
+                return
 
         # Normalize and scale by speed
         scale = min(self.speed, dist / dt) / max(dist, 0.001)
@@ -88,6 +134,8 @@ class DroneState:
             "armed": self.armed,
             "mode": self.mode,
             "target": self.target,
+            "path_progress": f"{self.path_index}/{len(self.path)}" if self.path else None,
+            "path_loop": self.path_loop if self.path else None,
         }
 
 
@@ -242,6 +290,25 @@ class APIHandler(BaseHTTPRequestHandler):
                         results[did] = "not found"
             self._json(200, {"results": results})
 
+        elif self.path == '/api/follow_path':
+            # Follow path: per-drone waypoint arrays
+            # {"paths": {"drone_0": [[x,y,z], [x,y,z], ...], ...}, "speed": 5, "loop": false}
+            paths = data.get('paths', {})
+            speed = data.get('speed', 5)
+            loop = data.get('loop', False)
+            results = {}
+            with lock:
+                for did, waypoints in paths.items():
+                    d = drones.get(did)
+                    if d and d.armed:
+                        d.set_path(waypoints, speed=speed, loop=loop)
+                        results[did] = f"following {len(waypoints)} waypoints (loop={loop})"
+                    elif d:
+                        results[did] = "not armed"
+                    else:
+                        results[did] = "not found"
+            self._json(200, {"results": results})
+
         elif self.path == '/api/emergency':
             with lock:
                 for d in drones.values():
@@ -300,7 +367,7 @@ def main():
     while supervisor.step(timestep) != -1:
         with lock:
             for drone in drones.values():
-                drone.move_toward_target(dt)
+                drone.tick(dt)
 
 
 if __name__ == "__main__":
