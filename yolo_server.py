@@ -83,14 +83,15 @@ class YOLODetector:
         self.detections = {}  # drone_id -> [detections]
         self.lock = threading.Lock()
         print(f"[YOLO] Model loaded ({len(self.model.names)} classes)")
+        print(f"[YOLO] Built-in tracking: BoT-SORT + ByteTrack")
 
     def add_camera(self, drone_id, port):
         cam = CameraStream(drone_id, port)
         self.cameras[drone_id] = cam
         return cam
 
-    def detect_frame(self, frame, confidence=0.4):
-        """Run YOLO on a numpy frame."""
+    def detect_frame(self, frame, confidence=0.4, track=True):
+        """Run YOLO detection + tracking on a numpy frame."""
         if frame is None:
             return []
 
@@ -98,7 +99,11 @@ class YOLODetector:
         if len(frame.shape) == 2:
             frame = np.stack([frame] * 3, axis=-1)
 
-        results = self.model(frame, verbose=False, conf=confidence)
+        # Use .track() for persistent IDs, .predict() for detection only
+        if track:
+            results = self.model.track(frame, persist=True, verbose=False, conf=confidence)
+        else:
+            results = self.model(frame, verbose=False, conf=confidence)
 
         detections = []
         for r in results:
@@ -108,17 +113,25 @@ class YOLODetector:
                 conf = float(box.conf[0])
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
 
-                detections.append({
+                det = {
                     "class": cls_name,
                     "confidence": round(conf, 3),
                     "bbox": [round(x1), round(y1), round(x2), round(y2)],
                     "center": [round((x1+x2)/2, 1), round((y1+y2)/2, 1)],
-                })
+                }
+
+                # Add track ID if available
+                if track and box.id is not None:
+                    track_id = int(box.id[0])
+                    det["track_id"] = track_id
+                    det["id"] = f"{cls_name}_{track_id}"
+
+                detections.append(det)
 
         return detections
 
     def detect_all(self, confidence=0.4):
-        """Run detection on all cameras with available frames."""
+        """Run detection + tracking on all cameras with available frames."""
         results = {}
         for drone_id, cam in self.cameras.items():
             frame = cam.get_latest()

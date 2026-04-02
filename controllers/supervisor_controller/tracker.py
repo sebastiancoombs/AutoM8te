@@ -1,178 +1,130 @@
 """
-Object Tracker — Simple SORT-style IOU tracker
+Object Tracker — Ultralytics Built-in BoT-SORT/ByteTrack
 
-Maintains persistent IDs across YOLO detection frames.
-No deep features needed — uses bounding box overlap (IOU).
+Uses YOLO's built-in .track() method which handles:
+- Persistent ID assignment across frames
+- Re-identification after occlusion (BoT-SORT)
+- Kalman filter prediction
+- IOU + appearance matching
 
-"That car at pixel (320,240) is car_3, same one from last frame."
+We just wrap it with a clean interface for the follow controller.
 """
 
 import time
-import math
-from collections import defaultdict
 
-
-def iou(box_a, box_b):
-    """Intersection over Union for two boxes [x1,y1,x2,y2]."""
-    x1 = max(box_a[0], box_b[0])
-    y1 = max(box_a[1], box_b[1])
-    x2 = min(box_a[2], box_b[2])
-    y2 = min(box_a[3], box_b[3])
-
-    inter = max(0, x2 - x1) * max(0, y2 - y1)
-    area_a = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
-    area_b = (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])
-    union = area_a + area_b - inter
-
-    return inter / max(union, 1e-6)
+try:
+    from ultralytics import YOLO
+    HAS_YOLO = True
+except ImportError:
+    HAS_YOLO = False
 
 
 class TrackedObject:
-    """A tracked object with persistent ID."""
+    """Thin wrapper around a YOLO tracking result for our follow controller."""
 
     def __init__(self, track_id, cls, bbox, center, confidence):
-        self.id = track_id
+        self.id = f"{cls}_{track_id}"
+        self.track_id = track_id
         self.cls = cls
         self.bbox = bbox
         self.center = center
         self.confidence = confidence
-        self.velocity = [0, 0]  # Pixel velocity (dx, dy per frame)
-        self.last_center = center
-        self.last_seen = time.time()
-        self.age = 0            # Frames since creation
-        self.hits = 1           # Frames where detected
-        self.misses = 0         # Consecutive frames without detection
-
-    def update(self, bbox, center, confidence):
-        """Update with new detection."""
-        self.velocity = [
-            center[0] - self.center[0],
-            center[1] - self.center[1],
-        ]
-        self.last_center = self.center
-        self.bbox = bbox
-        self.center = center
-        self.confidence = confidence
-        self.last_seen = time.time()
-        self.age += 1
-        self.hits += 1
-        self.misses = 0
-
-    def predict(self):
-        """Predict next position based on velocity."""
-        return [
-            self.center[0] + self.velocity[0],
-            self.center[1] + self.velocity[1],
-        ]
+        self.misses = 0  # Always 0 for current-frame detections
 
     def to_dict(self):
         return {
             "id": self.id,
+            "track_id": self.track_id,
             "class": self.cls,
             "bbox": self.bbox,
             "center": self.center,
             "confidence": self.confidence,
-            "velocity_px": [round(v, 1) for v in self.velocity],
-            "age": self.age,
-            "hits": self.hits,
-            "time_since_seen": round(time.time() - self.last_seen, 2),
         }
 
 
 class ObjectTracker:
     """
-    IOU-based multi-object tracker.
+    YOLO-based tracker using built-in BoT-SORT or ByteTrack.
     
-    Matches new YOLO detections to existing tracks using bounding box overlap.
-    Creates new tracks for unmatched detections, removes stale tracks.
+    Just call update(frame) each tick — YOLO handles everything.
     """
 
-    def __init__(self, iou_threshold=0.3, max_misses=15):
-        self.tracks = {}         # track_id -> TrackedObject
-        self.next_id = 0
-        self.iou_threshold = iou_threshold
-        self.max_misses = max_misses
+    def __init__(self, model_path="yolov8n.pt", tracker="botsort.yaml", confidence=0.4):
+        self.model = None
+        self.tracker_config = tracker
+        self.confidence = confidence
+        self.tracks = {}  # track_id_str -> TrackedObject
+        self.enabled = False
 
-    def _new_id(self, cls):
-        tid = f"{cls}_{self.next_id}"
-        self.next_id += 1
-        return tid
+        if HAS_YOLO:
+            try:
+                self.model = YOLO(model_path)
+                self.enabled = True
+                print(f"[Tracker] YOLOv8 + {tracker} ready ({len(self.model.names)} classes)")
+            except Exception as e:
+                print(f"[Tracker] Failed to load model: {e}")
 
-    def update(self, detections):
+    def update(self, frame):
         """
-        Update tracker with new YOLO detections.
+        Run YOLO tracking on a frame.
         
         Args:
-            detections: list of {"class", "bbox", "center", "confidence"}
-        
+            frame: numpy array (H, W, 3) RGB image
+            
         Returns:
-            list of TrackedObject (active tracks)
+            list of TrackedObject (current frame detections with persistent IDs)
         """
-        # Mark all tracks as missed this frame
-        for track in self.tracks.values():
-            track.misses += 1
-            track.age += 1
+        if not self.enabled or frame is None:
+            return []
 
-        # Match detections to existing tracks
-        unmatched_detections = list(range(len(detections)))
-        matched = set()
+        # model.track() handles detection + tracking + ID persistence
+        results = self.model.track(
+            frame,
+            persist=True,
+            tracker=self.tracker_config,
+            conf=self.confidence,
+            verbose=False,
+        )
 
-        # Try to match each track to best detection
-        for tid, track in list(self.tracks.items()):
-            best_iou = 0
-            best_det_idx = None
+        tracked = []
+        self.tracks.clear()
 
-            for det_idx in unmatched_detections:
-                det = detections[det_idx]
-                if det["class"] != track.cls:
+        for r in results:
+            if r.boxes is None or not r.boxes.is_track:
+                continue
+
+            for box in r.boxes:
+                if box.id is None:
                     continue
-                score = iou(track.bbox, det["bbox"])
-                if score > best_iou:
-                    best_iou = score
-                    best_det_idx = det_idx
 
-            if best_iou >= self.iou_threshold and best_det_idx is not None:
-                det = detections[best_det_idx]
-                track.update(det["bbox"], det["center"], det["confidence"])
-                unmatched_detections.remove(best_det_idx)
-                matched.add(tid)
+                track_id = int(box.id[0])
+                cls_id = int(box.cls[0])
+                cls_name = self.model.names[cls_id]
+                conf = float(box.conf[0])
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
 
-        # Create new tracks for unmatched detections
-        for det_idx in unmatched_detections:
-            det = detections[det_idx]
-            tid = self._new_id(det["class"])
-            self.tracks[tid] = TrackedObject(
-                tid, det["class"], det["bbox"], det["center"], det["confidence"]
-            )
+                obj = TrackedObject(
+                    track_id=track_id,
+                    cls=cls_name,
+                    bbox=[round(x1), round(y1), round(x2), round(y2)],
+                    center=[round(cx, 1), round(cy, 1)],
+                    confidence=round(conf, 3),
+                )
+                tracked.append(obj)
+                self.tracks[obj.id] = obj
 
-        # Remove stale tracks
-        stale = [tid for tid, t in self.tracks.items() if t.misses > self.max_misses]
-        for tid in stale:
-            del self.tracks[tid]
-
-        return list(self.tracks.values())
+        return tracked
 
     def get_by_class(self, cls):
-        """Get all tracks of a specific class."""
-        return [t for t in self.tracks.values() if t.cls == cls and t.misses == 0]
+        return [t for t in self.tracks.values() if t.cls == cls]
 
-    def get_by_id(self, track_id):
-        """Get a specific track by ID."""
-        return self.tracks.get(track_id)
+    def get_by_id(self, track_id_str):
+        return self.tracks.get(track_id_str)
 
-    def get_closest(self, cls, to_center=None):
-        """Get the closest tracked object of a class to frame center."""
-        candidates = self.get_by_class(cls)
-        if not candidates:
-            return None
-        if to_center is None:
-            to_center = [320, 240]  # Default frame center
-        return min(candidates, key=lambda t: 
-            math.sqrt((t.center[0]-to_center[0])**2 + (t.center[1]-to_center[1])**2))
-
-    def get_all_active(self):
-        """All tracks seen in the last frame."""
-        return [t for t in self.tracks.values() if t.misses == 0]
+    def get_all(self):
+        return list(self.tracks.values())
 
     def to_dict(self):
-        return {tid: t.to_dict() for tid, t in self.tracks.items() if t.misses < 5}
+        return {tid: t.to_dict() for tid, t in self.tracks.items()}
