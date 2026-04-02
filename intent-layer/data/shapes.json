@@ -283,24 +283,84 @@
       {
         "equation": "line",
         "start": [
-          0,
-          0
+          -10,
+          -10
         ],
         "end": [
-          0,
-          0
+          10,
+          -10
         ]
       },
       {
-        "equation": "circle",
-        "center": [
-          0,
-          -5
+        "equation": "line",
+        "start": [
+          10,
+          -10
         ],
-        "radius": 3
+        "end": [
+          0,
+          10
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          0,
+          10
+        ],
+        "end": [
+          -10,
+          -10
+        ]
       }
     ],
-    "scale": 1,
-    "created": "2026-04-02T11:07:53.282Z"
+    "scale": 8,
+    "created": "2026-04-02T11:40:46.984Z"
+  },
+  "pyramid_orbit": {
+    "name": "pyramid_orbit",
+    "curves": [
+      {
+        "equation": "line",
+        "start": [
+          -10,
+          -10
+        ],
+        "end": [
+          10,
+          -10
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          10,
+          -10
+        ],
+        "end": [
+          0,
+          10
+        ]
+      },
+      {
+        "equation": "line",
+        "start": [
+          0,
+          10
+        ],
+        "end": [
+          -10,
+          -10
+        ]
+      }
+    ],
+    "scale": 8,
+    "created": "2026-04-02T11:41:25.286Z",
+    "motion": {
+      "path": "circle",
+      "radius_m": 30,
+      "duration_s": 20,
+      "rotate_with_path": true
+    }
   }
 }

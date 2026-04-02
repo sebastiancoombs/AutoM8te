@@ -316,9 +316,48 @@ async function getRichContext() {
   return { swarm: { total: states.size, center: swarmCenter.map(p => Math.round(p * 10) / 10), groups: groupSummaries }, objects };
 }
 
-async function formatWithContext(message) {
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function verifyDroneState(droneIds, expectedCheck, timeoutMs = 3000) {
+  // Poll drone states until expected condition is met or timeout
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const states = await backend.getDroneStates();
+    const results = {};
+    let allOk = true;
+    for (const id of droneIds) {
+      const s = states.get(id);
+      if (!s) { results[id] = '❌ not found'; allOk = false; continue; }
+      const check = expectedCheck(s);
+      results[id] = check.ok ? `✅ ${check.detail}` : `⏳ ${check.detail}`;
+      if (!check.ok) allOk = false;
+    }
+    if (allOk) return { verified: true, results };
+    await sleep(500);
+  }
+  // Timeout — report actual state
+  const states = await backend.getDroneStates();
+  const results = {};
+  for (const id of droneIds) {
+    const s = states.get(id);
+    if (!s) { results[id] = '❌ not found'; continue; }
+    const check = expectedCheck(s);
+    results[id] = check.ok ? `✅ ${check.detail}` : `❌ ${check.detail}`;
+  }
+  return { verified: false, results };
+}
+
+async function formatWithContext(message, verification = null) {
   const ctx = await getRichContext();
-  const lines = [message, '---'];
+  const lines = [message];
+  if (verification) {
+    const status = verification.verified ? '✅ Verified' : '⚠️ Not confirmed';
+    lines.push(`\n${status}:`);
+    for (const [id, detail] of Object.entries(verification.results)) {
+      lines.push(`  ${id}: ${detail}`);
+    }
+  }
+  lines.push('---');
   lines.push(`📍 Swarm (${ctx.swarm.total} drones):`);
   for (const [name, g] of Object.entries(ctx.swarm.groups)) {
     lines.push(`  ${name} (${g.count}): ${g.task} ${g.formation !== 'none' ? 'in ' + g.formation : ''}`);
@@ -348,23 +387,39 @@ async function executeTool(name, args) {
           const spd = resolveSpeed(args.speed || 'normal');
           await Promise.all(droneIds.map(id => backend.takeoff(id, alt, spd)));
           if (args.group) groups.setGroupTask(args.group, { type: 'taking off', altitude_m: alt });
-          return formatWithContext(`${target}: ${droneIds.length} drone(s) taking off to ${alt}m`);
+          const v = await verifyDroneState(droneIds, s => {
+            const airborne = s.position[2] > 1.0;
+            return { ok: airborne, detail: airborne ? `alt ${s.position[2].toFixed(1)}m, ${s.mode}` : `alt ${s.position[2].toFixed(1)}m — still on ground` };
+          });
+          return formatWithContext(`${target}: takeoff to ${alt}m`, v);
         }
         case 'land': {
           const spd = resolveSpeed(args.speed || 'slow');
           await Promise.all(droneIds.map(id => backend.land(id, spd)));
           if (args.group) groups.setGroupTask(args.group, { type: 'landing' });
-          return formatWithContext(`${target}: ${droneIds.length} drone(s) landing`);
+          const v = await verifyDroneState(droneIds, s => {
+            const grounded = s.position[2] < 0.5;
+            return { ok: grounded, detail: grounded ? 'landed' : `alt ${s.position[2].toFixed(1)}m — descending` };
+          });
+          return formatWithContext(`${target}: land`, v);
         }
         case 'hover': {
           await Promise.all(droneIds.map(id => backend.hover(id)));
           if (args.group) groups.setGroupTask(args.group, { type: 'hovering' });
-          return formatWithContext(`${target}: hovering`);
+          const v = await verifyDroneState(droneIds, s => {
+            const hovering = s.mode === 'HOVER';
+            return { ok: hovering, detail: `${s.mode} at alt ${s.position[2].toFixed(1)}m` };
+          });
+          return formatWithContext(`${target}: hover`, v);
         }
         case 'rtl': {
           await Promise.all(droneIds.map(id => backend.rtl(id)));
           if (args.group) groups.setGroupTask(args.group, { type: 'returning' });
-          return formatWithContext(`${target}: returning to launch`);
+          const v = await verifyDroneState(droneIds, s => {
+            const grounded = s.position[2] < 0.5;
+            return { ok: grounded, detail: grounded ? 'landed' : `alt ${s.position[2].toFixed(1)}m — returning` };
+          }, 5000);
+          return formatWithContext(`${target}: return to launch`, v);
         }
         case 'emergency': {
           await backend.emergency(args.drone_id);
@@ -380,11 +435,25 @@ async function executeTool(name, args) {
       const { vector, frame } = resolveDirection(args.direction);
       const scaled = scaleVector(vector, args.distance_m);
       const speed = resolveSpeed(args.speed || 'normal');
-      Promise.all(droneIds.map(id => backend.goTo(id, scaled[0], scaled[1], scaled[2], speed, frame)))
-        .catch(err => console.error('[move] Error:', err));
+      // Capture starting positions for verification
+      const startStates = await backend.getDroneStates();
+      const startPositions = {};
+      for (const id of droneIds) {
+        const s = startStates.get(id);
+        if (s) startPositions[id] = [...s.position];
+      }
+      await Promise.all(droneIds.map(id => backend.goTo(id, scaled[0], scaled[1], scaled[2], speed, frame)));
       if (args.group) groups.setGroupTask(args.group, { type: 'moving', direction: args.direction, distance_m: args.distance_m });
       const target = args.group || args.drone_id || 'all';
-      return formatWithContext(`${target}: ${droneIds.length} drone(s) moving ${args.direction} ${args.distance_m}m`);
+      const v = await verifyDroneState(droneIds, s => {
+        const start = startPositions[s.id];
+        if (!start) return { ok: false, detail: 'no start position' };
+        const dx = s.position[0] - start[0], dy = s.position[1] - start[1], dz = s.position[2] - start[2];
+        const moved = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        const moving = moved > 0.3 || s.mode === 'GUIDED';
+        return { ok: moving, detail: moving ? `moved ${moved.toFixed(1)}m, ${s.mode}` : `hasn't moved (${s.mode})` };
+      });
+      return formatWithContext(`${target}: move ${args.direction} ${args.distance_m}m`, v);
     }
 
     case 'drone_formation': {
