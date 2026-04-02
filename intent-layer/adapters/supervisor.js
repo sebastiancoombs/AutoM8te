@@ -51,9 +51,8 @@ export class SupervisorAdapter {
   }
 
   async _ensureConnected() {
-    if (!this.connected) {
-      await this._tryConnect();
-    }
+    // Always try — Webots might have just started or restarted
+    await this._tryConnect();
     if (!this.connected) {
       return { error: `Webots Supervisor not running on ${SUPERVISOR_URL}. Run ./launch_supervisor.sh` };
     }
@@ -120,21 +119,28 @@ export class SupervisorAdapter {
   }
 
   async goTo(droneId, x, y, z, speed) {
-    // Relative move
+    const err = await this._ensureConnected();
+    if (err) return err;
     return fetchJSON('/api/goto', 'POST', {
       drone_id: droneId, north: x, east: y, altitude: z, speed,
     });
   }
 
   async hover(droneId) {
+    const err = await this._ensureConnected();
+    if (err) return err;
     return fetchJSON('/api/hover', 'POST', { drone_id: droneId });
   }
 
   async rtl(droneId) {
+    const err = await this._ensureConnected();
+    if (err) return err;
     return fetchJSON('/api/land', 'POST', { drone_id: droneId });
   }
 
   async emergency(droneId) {
+    const err = await this._ensureConnected();
+    if (err) return err;
     return fetchJSON('/api/emergency', 'POST', {});
   }
 
