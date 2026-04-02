@@ -28,29 +28,36 @@ export class SupervisorAdapter {
   }
 
   async connect() {
-    // Try to connect — retry for 60s since Webots may still be loading
-    console.error(`[Supervisor] Connecting to ${SUPERVISOR_URL}...`);
-    for (let i = 0; i < 60; i++) {
-      try {
-        const status = await fetchJSON('/api/status');
-        if (status.drones) {
-          this.connected = true;
-          this.droneCount = status.count;
-          this._updateDrones(status.drones);
-          console.error(`[Supervisor] Connected — ${this.droneCount} drones`);
-          return;
+    // Just try once — real connection happens lazily on first command
+    await this._tryConnect();
+  }
+
+  async _tryConnect() {
+    try {
+      const status = await fetchJSON('/api/status');
+      if (status.drones) {
+        if (!this.connected) {
+          console.error(`[Supervisor] Connected — ${status.count} drones`);
         }
-      } catch (e) {
-        if (i % 10 === 0) {
-          console.error(`[Supervisor] Waiting for Webots Supervisor on ${SUPERVISOR_URL}... (${i}s)`);
-        }
+        this.connected = true;
+        this.droneCount = status.count;
+        this._updateDrones(status.drones);
+        return true;
       }
-      await new Promise(r => setTimeout(r, 1000));
+    } catch {
+      this.connected = false;
     }
-    throw new Error(
-      `Supervisor API not available at ${SUPERVISOR_URL} after 60s. ` +
-      `Is Webots running? Launch with: ./launch_supervisor.sh`
-    );
+    return false;
+  }
+
+  async _ensureConnected() {
+    if (!this.connected) {
+      await this._tryConnect();
+    }
+    if (!this.connected) {
+      return { error: `Webots Supervisor not running on ${SUPERVISOR_URL}. Run ./launch_supervisor.sh` };
+    }
+    return null;
   }
 
   _updateDrones(droneData) {
@@ -76,12 +83,7 @@ export class SupervisorAdapter {
   isConnected() { return this.connected; }
 
   async getDroneStates() {
-    try {
-      const status = await fetchJSON('/api/status');
-      this._updateDrones(status.drones);
-    } catch (e) {
-      // Use cached
-    }
+    await this._tryConnect();  // Reconnect if needed, update state
     return new Map(this.drones);
   }
 
@@ -105,18 +107,15 @@ export class SupervisorAdapter {
 
   // --- Commands ---
 
-  _checkConnected() {
-    if (!this.connected) {
-      throw new Error('Not connected to Webots Supervisor. Run ./launch_supervisor.sh first.');
-    }
-  }
-
   async takeoff(droneId, altitude, speed) {
-    this._checkConnected();
+    const err = await this._ensureConnected();
+    if (err) return err;
     return fetchJSON('/api/takeoff', 'POST', { drone_id: droneId, altitude, speed });
   }
 
   async land(droneId, speed) {
+    const err = await this._ensureConnected();
+    if (err) return err;
     return fetchJSON('/api/land', 'POST', { drone_id: droneId });
   }
 

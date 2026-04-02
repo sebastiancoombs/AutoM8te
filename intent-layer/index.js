@@ -40,7 +40,7 @@ if (PERCEPTION === 'yolo') {
 }
 
 // --- Backend resolution ---
-// Default to supervisor. No silent fallback — if Webots isn't running, fail loud.
+// Default to supervisor. Connects lazily — no startup wait.
 if (BACKEND === 'auto') {
   BACKEND = 'supervisor';
 }
