@@ -41,30 +41,57 @@ except ImportError:
 # ─── Drone State ─────────────────────────────────────────────────────
 
 class DroneState:
-    def __init__(self, drone_id, node, trans_field, rot_field):
+    """Drone state managed by Supervisor.
+    
+    Communication with drone controller via customData field:
+    - Supervisor writes: {"target": [x,y,z], "cmd": "...", "armed": true}
+    - Drone writes back: {"pos": [x,y,z], "mode": "...", "armed": true}
+    """
+    def __init__(self, drone_id, node, trans_field, rot_field, custom_data_field):
         self.id = drone_id
         self.node = node
         self.trans_field = trans_field
         self.rot_field = rot_field
+        self.custom_data_field = custom_data_field
         self.target = None          # Current target position [x, y, z]
         self.path = []              # Queue of waypoints [[x,y,z], ...]
-        self.path_index = 0         # Current waypoint in path
-        self.path_loop = False      # Loop back to start when done
+        self.path_index = 0
+        self.path_loop = False
         self.velocity = [0, 0, 0]
-        self.speed = 5.0            # m/s
+        self.speed = 5.0
         self.armed = False
-        self.mode = "IDLE"          # IDLE, GUIDED, LANDING, HOVER, FOLLOWING_PATH
+        self.mode = "IDLE"
+        self._prev_pos = None
 
     @property
     def position(self):
+        """Read actual GPS position from drone's customData, fall back to translation."""
+        try:
+            raw = self.custom_data_field.getSFString()
+            if raw:
+                data = json.loads(raw)
+                if "pos" in data:
+                    return data["pos"]
+        except:
+            pass
         return list(self.trans_field.getSFVec3f())
 
-    @position.setter
-    def position(self, pos):
-        self.trans_field.setSFVec3f(pos)
+    def _send_to_drone(self, cmd_data):
+        """Write command to drone via customData field."""
+        try:
+            raw = self.custom_data_field.getSFString()
+            existing = {}
+            if raw:
+                try:
+                    existing = json.loads(raw)
+                except:
+                    pass
+            existing.update(cmd_data)
+            self.custom_data_field.setSFString(json.dumps(existing))
+        except Exception as e:
+            print(f"[Supervisor] customData write failed for {self.id}: {e}")
 
     def set_path(self, waypoints, speed=5.0, loop=False):
-        """Set a path of waypoints to follow."""
         self.path = waypoints
         self.path_index = 0
         self.path_loop = loop
@@ -72,11 +99,11 @@ class DroneState:
         if waypoints:
             self.target = waypoints[0]
             self.mode = "FOLLOWING_PATH"
+            self._send_to_drone({"target": self.target, "cmd": "goto", "armed": True})
         else:
             self.target = None
 
     def _advance_path(self):
-        """Move to next waypoint in path."""
         self.path_index += 1
         if self.path_index < len(self.path):
             self.target = self.path[self.path_index]
@@ -84,72 +111,46 @@ class DroneState:
             self.path_index = 0
             self.target = self.path[0]
         else:
-            # Path complete
             self.target = None
             self.path = []
             self.path_index = 0
             self.mode = "HOVER"
+            self._send_to_drone({"cmd": "hover"})
+            return
+        # Send next waypoint to drone
+        self._send_to_drone({"target": self.target, "cmd": "goto"})
 
     def tick(self, dt):
-        """Main update — move toward current target, advance path when reached."""
+        """Check if drone reached waypoint, advance path if needed."""
         if self.target is None or not self.armed:
-            self.velocity = [0, 0, 0]
             return
 
-        # Validate target has no None values
         if any(v is None for v in self.target):
-            self.velocity = [0, 0, 0]
             return
 
         pos = self.position
+        # Estimate velocity from position change
+        if self._prev_pos:
+            self.velocity = [
+                (pos[0] - self._prev_pos[0]) / max(dt, 1e-6),
+                (pos[1] - self._prev_pos[1]) / max(dt, 1e-6),
+                (pos[2] - self._prev_pos[2]) / max(dt, 1e-6),
+            ]
+        self._prev_pos = list(pos)
+
         dx = self.target[0] - pos[0]
         dy = self.target[1] - pos[1]
         dz = self.target[2] - pos[2]
         dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
-        # Waypoint reached threshold
-        threshold = 0.5 if self.path else 0.3
+        threshold = 1.5 if self.path else 1.0  # Wider threshold for physics flight
 
         if dist < threshold:
-            # Arrived at target — snap to exact position to prevent bouncing
-            if not self.path:
-                self.position = [self.target[0], self.target[1], self.target[2]]
-                self.velocity = [0, 0, 0]
-                self.mode = "HOVER"
-                return  # Keep target so we hold position
             if self.path:
                 self._advance_path()
-                if self.target is None:
-                    self.velocity = [0, 0, 0]
-                    return
-                # Recalculate toward new target
-                pos = self.position
-                dx = self.target[0] - pos[0]
-                dy = self.target[1] - pos[1]
-                dz = self.target[2] - pos[2]
-                dist = math.sqrt(dx*dx + dy*dy + dz*dz)
-                if dist < 0.1:
-                    return
             else:
-                self.velocity = [0, 0, 0]
                 self.mode = "HOVER"
-                return
-
-        # Normalize and scale by speed
-        scale = min(self.speed, dist / dt) / max(dist, 0.001)
-        vx = dx * scale
-        vy = dy * scale
-        vz = dz * scale
-
-        self.velocity = [vx, vy, vz]
-
-        # Update position
-        new_pos = [
-            pos[0] + vx * dt,
-            pos[1] + vy * dt,
-            pos[2] + vz * dt,
-        ]
-        self.position = new_pos
+                self._send_to_drone({"cmd": "hover", "target": self.target})
 
     def to_dict(self):
         pos = self.position
@@ -238,6 +239,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         d.armed = True
                         d.mode = "GUIDED"
                         d.target = [pos[0], pos[1], alt]
+                        d._send_to_drone({"target": d.target, "cmd": "takeoff", "armed": True})
                         results[did] = f"taking off to {alt}m"
                     else:
                         results[did] = "not found"
@@ -251,9 +253,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 for did in targets:
                     d = drones.get(did)
                     if d:
-                        pos = d.position
                         d.mode = "LANDING"
-                        d.target = [pos[0], pos[1], 0.4]  # Ground level
+                        d._send_to_drone({"cmd": "land", "armed": True})
                         results[did] = "landing"
                     else:
                         results[did] = "not found"
@@ -278,6 +279,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         d.target = [pos[0] + north, pos[1] + east, alt]
                         d.speed = speed
                         d.mode = "GUIDED"
+                        d._send_to_drone({"target": d.target, "cmd": "goto", "armed": True})
                         results[did] = f"going to N={north} E={east} alt={alt}"
                     else:
                         results[did] = "not found"
@@ -301,6 +303,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         d.target = [x, y, z]
                         d.speed = speed
                         d.mode = "GUIDED"
+                        d._send_to_drone({"target": d.target, "cmd": "goto", "armed": True})
                         results[did] = f"going to ({x}, {y}, {z})"
                     else:
                         results[did] = "not found"
@@ -314,16 +317,17 @@ class APIHandler(BaseHTTPRequestHandler):
                 for did in targets:
                     d = drones.get(did)
                     if d:
-                        d.target = None
+                        pos = d.position
+                        d.target = pos  # Hold current position
                         d.mode = "HOVER"
+                        d._send_to_drone({"target": pos, "cmd": "hover", "armed": True})
                         results[did] = "hovering"
                     else:
                         results[did] = "not found"
             self._json(200, {"results": results})
 
         elif self.path == '/api/formation':
-            # Direct formation: provide absolute positions per drone
-            positions = data.get('positions', {})  # {drone_id: [x, y, z]}
+            positions = data.get('positions', {})
             speed = data.get('speed', 5)
             results = {}
             with lock:
@@ -335,7 +339,6 @@ class APIHandler(BaseHTTPRequestHandler):
                     if not d.armed:
                         results[did] = "not armed"
                         continue
-                    # Validate position values
                     if not isinstance(pos, list) or len(pos) < 3 or any(v is None for v in pos):
                         results[did] = f"invalid position: {pos}"
                         continue
@@ -343,6 +346,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     d.target = pos
                     d.speed = speed
                     d.mode = "GUIDED"
+                    d._send_to_drone({"target": pos, "cmd": "goto", "armed": True})
                     results[did] = f"moving to ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})"
             self._json(200, {"results": results})
 
@@ -417,6 +421,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     d.armed = False
                     d.target = None
                     d.mode = "IDLE"
+                    d._send_to_drone({"cmd": "idle", "armed": False, "target": None})
             self._json(200, {"status": "all drones disarmed"})
 
         else:
@@ -453,7 +458,8 @@ def main():
             break
         trans = node.getField("translation")
         rot = node.getField("rotation")
-        drone = DroneState(f"drone_{i}", node, trans, rot)
+        custom = node.getField("customData")
+        drone = DroneState(f"drone_{i}", node, trans, rot, custom)
         drones[f"drone_{i}"] = drone
         print(f"[AutoM8te] Found {def_name} at {drone.position}")
 
