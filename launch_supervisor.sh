@@ -79,6 +79,20 @@ if [ -d "$INTENT_LAYER" ]; then
     echo -e "  ${GREEN}✓${NC} Intent layer on port 9090 (formations, choreography, groups)"
 fi
 
+# Start YOLO vision server
+if [ -f "$SCRIPT_DIR/venv310/bin/python" ]; then
+    PYTHON="$SCRIPT_DIR/venv310/bin/python"
+    echo -e "${CYAN}[4/4] Starting YOLO vision server...${NC}"
+    "$PYTHON" "$SCRIPT_DIR/yolo_server.py" \
+        --drones "$DRONE_COUNT" \
+        --camera-base-port 5600 \
+        --port 8081 &
+    YOLO_PID=$!
+    echo -e "  ${GREEN}✓${NC} YOLO server on port 8081 (YOLOv8n, 80 classes)"
+else
+    echo -e "  ⚠️ Python 3.10 venv not found — YOLO server skipped"
+fi
+
 echo
 echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║   AutoM8te is running!               ║${NC}"
@@ -86,6 +100,7 @@ echo -e "${GREEN}╠════════════════════
 echo -e "${GREEN}║   Drones:  $DRONE_COUNT                          ║${NC}"
 echo -e "${GREEN}║   Control: http://localhost:8080      ║${NC}"
 echo -e "${GREEN}║   Intent:  http://localhost:9090      ║${NC}"
+echo -e "${GREEN}║   Vision:  http://localhost:8081      ║${NC}"
 echo -e "${GREEN}║   Backend: Webots Supervisor          ║${NC}"
 echo -e "${GREEN}║   Physics: Single engine (fast!)      ║${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════╣${NC}"

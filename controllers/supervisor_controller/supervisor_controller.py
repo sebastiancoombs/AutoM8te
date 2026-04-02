@@ -23,6 +23,13 @@ sys.path.append(f"{WEBOTS_HOME}/lib/controller/python")
 
 from controller import Supervisor
 
+# Vision (YOLO)
+try:
+    from vision import VisionManager
+    HAS_VISION = True
+except ImportError:
+    HAS_VISION = False
+
 # ─── Drone State ─────────────────────────────────────────────────────
 
 class DroneState:
@@ -143,6 +150,7 @@ class DroneState:
 
 drones = {}       # drone_id -> DroneState
 supervisor = None
+vision = None     # VisionManager
 lock = threading.Lock()
 
 
@@ -168,7 +176,28 @@ class APIHandler(BaseHTTPRequestHandler):
         if self.path == '/api/status':
             with lock:
                 states = {did: d.to_dict() for did, d in drones.items()}
-            self._json(200, {"drones": states, "count": len(states), "backend": "webots-supervisor"})
+            result = {"drones": states, "count": len(states), "backend": "webots-supervisor"}
+            if vision:
+                result["vision"] = vision.get_status()
+            self._json(200, result)
+
+        elif self.path == '/api/detect':
+            # Run YOLO on all cameras
+            if not vision or not vision.enabled:
+                self._json(200, {"detections": {}, "error": "vision not available"})
+                return
+            detections = vision.detect_all()
+            self._json(200, {"detections": detections})
+
+        elif self.path.startswith('/api/detect/'):
+            # Run YOLO on specific drone: /api/detect/drone_0
+            drone_id = self.path.split('/')[-1]
+            if not vision or not vision.enabled:
+                self._json(200, {"detections": [], "error": "vision not available"})
+                return
+            detections = vision.detect_one(drone_id)
+            self._json(200, {"drone_id": drone_id, "detections": detections})
+
         else:
             self._json(404, {"error": "not found"})
 
@@ -330,11 +359,17 @@ def start_http(port=8080):
 # ─── Main ────────────────────────────────────────────────────────────
 
 def main():
-    global supervisor
+    global supervisor, vision
 
     supervisor = Supervisor()
     timestep = int(supervisor.getBasicTimeStep())
     dt = timestep / 1000.0  # Convert ms to seconds
+
+    # Initialize vision
+    if HAS_VISION:
+        vision = VisionManager()
+    else:
+        print("[AutoM8te] Vision module not available")
 
     # Find all DRONE_N nodes
     i = 0
@@ -348,6 +383,19 @@ def main():
         drone = DroneState(f"drone_{i}", node, trans, rot)
         drones[f"drone_{i}"] = drone
         print(f"[AutoM8te] Found {def_name} at {drone.position}")
+
+        # Register camera for vision if available
+        if vision and vision.enabled:
+            try:
+                # Get camera from the drone's extension slot
+                # Supervisor can access devices of other robots
+                camera = supervisor.getFromDef(f"DRONE_{i}").getDevice("camera") if hasattr(node, 'getDevice') else None
+                if camera is None:
+                    # Alternative: cameras stream on ports, access via those
+                    print(f"[AutoM8te] Note: {def_name} camera — use streaming port {5600+i} for external YOLO")
+            except Exception as e:
+                print(f"[AutoM8te] Camera access for {def_name}: {e}")
+
         i += 1
 
     if not drones:
