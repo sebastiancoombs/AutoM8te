@@ -58,14 +58,7 @@ for i in $(seq 0 $((DRONE_COUNT - 1))); do
     echo "  Instance $i → TCP :$PORT, UDP :$((14550 + i * 10))"
 
     cd "$ARDUPILOT_HOME"
-    # Start arducopter directly with extra serial output for DroneKit
-    "$ARDUPILOT_HOME/build/sitl/bin/arducopter" \
-        --model webots-python \
-        -I$i \
-        --defaults "$ARDUPILOT_HOME/Tools/autotest/default_params/copter.parm,$PARAMS_FILE" \
-        --sim-address=127.0.0.1 \
-        -A "tcp:0.0.0.0:$((5760 + i * 10))" \
-        > "$SCRIPT_DIR/logs/sitl_instance_$i.log" 2>&1 &
+    osascript -e "tell application \"Terminal\" to do script \"cd $ARDUPILOT_HOME && python3 Tools/autotest/sim_vehicle.py -v ArduCopter --model webots-python -I$i --no-rebuild --add-param-file=$PARAMS_FILE\"" &
     PIDS+=($!)
     cd "$SCRIPT_DIR"
 
