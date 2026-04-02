@@ -1822,7 +1822,7 @@ DEF SUPERVISOR Robot {
 DEF DRONE_0 Iris {
   translation -47.5 42.5 0.4
   name "drone_0"
-  controller "<none>"
+  controller "camera_streamer"
   supervisor FALSE
   extensionSlot [
     Camera {
@@ -1839,7 +1839,7 @@ DEF DRONE_0 Iris {
 DEF DRONE_1 Iris {
   translation -42.5 42.5 0.4
   name "drone_1"
-  controller "<none>"
+  controller "camera_streamer"
   supervisor FALSE
   extensionSlot [
     Camera {
@@ -1856,7 +1856,7 @@ DEF DRONE_1 Iris {
 DEF DRONE_2 Iris {
   translation -47.5 47.5 0.4
   name "drone_2"
-  controller "<none>"
+  controller "camera_streamer"
   supervisor FALSE
   extensionSlot [
     Camera {
@@ -1873,7 +1873,7 @@ DEF DRONE_2 Iris {
 DEF DRONE_3 Iris {
   translation -42.5 47.5 0.4
   name "drone_3"
-  controller "<none>"
+  controller "camera_streamer"
   supervisor FALSE
   extensionSlot [
     Camera {

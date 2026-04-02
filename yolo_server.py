@@ -186,16 +186,17 @@ class YOLOHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/api/detect':
-            results = detector.detect_all()
+            # Return cached detections (updated by background detection loop)
+            results = detector.get_cached()
             self._json(200, {"detections": results})
 
         elif self.path.startswith('/api/detect/'):
             drone_id = self.path.split('/')[-1]
-            cam = detector.cameras.get(drone_id)
-            if cam:
-                frame = cam.get_latest()
-                dets = detector.detect_frame(frame)
-                self._json(200, {"drone_id": drone_id, "detections": dets})
+            cached = detector.get_cached()
+            if drone_id in cached:
+                self._json(200, {"drone_id": drone_id, "detections": cached[drone_id]})
+            elif drone_id in detector.cameras:
+                self._json(200, {"drone_id": drone_id, "detections": [], "note": "no detections yet"})
             else:
                 self._json(404, {"error": f"no camera for {drone_id}"})
 
@@ -222,11 +223,18 @@ def camera_reader(cam):
     while True:
         if not cam.connected:
             if not cam.connect():
-                time.sleep(3)  # Retry every 3 seconds
+                time.sleep(3)
                 continue
         frame = cam.read_frame()
         if frame is None and not cam.connected:
-            time.sleep(1)  # Reconnect delay
+            time.sleep(1)
+
+
+def detection_loop(det, interval=0.5):
+    """Run YOLO detection continuously in background (2 fps)."""
+    while True:
+        det.detect_all()
+        time.sleep(interval)
 
 
 # ─── Main ────────────────────────────────────────────────────────────
@@ -252,6 +260,11 @@ def main():
         # Start reader thread
         t = threading.Thread(target=camera_reader, args=(cam,), daemon=True)
         t.start()
+
+    # Start background detection loop (runs YOLO continuously)
+    det_thread = threading.Thread(target=detection_loop, args=(detector,), daemon=True)
+    det_thread.start()
+    print(f"[YOLO] Detection loop running (2 fps)")
 
     print(f"[YOLO] Server starting on port {args.port}")
     server = HTTPServer(('0.0.0.0', args.port), YOLOHandler)
