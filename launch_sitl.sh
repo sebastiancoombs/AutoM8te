@@ -58,14 +58,13 @@ for i in $(seq 0 $((DRONE_COUNT - 1))); do
     echo "  Instance $i → TCP :$PORT, UDP :$((14550 + i * 10))"
 
     cd "$ARDUPILOT_HOME"
-    python3 Tools/autotest/sim_vehicle.py \
-        -v ArduCopter \
+    # Start arducopter directly with extra serial output for DroneKit
+    "$ARDUPILOT_HOME/build/sitl/bin/arducopter" \
         --model webots-python \
         -I$i \
-        --no-rebuild \
-        --no-mavproxy \
-        --out="udp:127.0.0.1:$((14550 + i * 10))" \
-        --add-param-file="$PARAMS_FILE" \
+        --defaults "$ARDUPILOT_HOME/Tools/autotest/default_params/copter.parm,$PARAMS_FILE" \
+        --sim-address=127.0.0.1 \
+        -A "tcp:0.0.0.0:$((5760 + i * 10))" \
         > "$SCRIPT_DIR/logs/sitl_instance_$i.log" 2>&1 &
     PIDS+=($!)
     cd "$SCRIPT_DIR"
@@ -110,7 +109,7 @@ fi
 # ─── Step 5: Start DroneKit Bridge ──────────────────────────────────
 echo -e "${CYAN}[5/6] Starting DroneKit Bridge on :8080...${NC}"
 cd "$SCRIPT_DIR"
-python3 dronekit_bridge.py --drones "$DRONE_COUNT" --base-port 14550 --http-port 8070 \
+python3 dronekit_bridge.py --drones "$DRONE_COUNT" --base-port 5760 --http-port 8070 \
     > "$SCRIPT_DIR/logs/bridge.log" 2>&1 &
 PIDS+=($!)
 echo "  Waiting 60s for DroneKit to connect to all SITL instances..."
