@@ -576,9 +576,15 @@ async function handleMessage(message) {
   try {
     switch (method) {
       case 'initialize':
-        await backend.connect();
+        try {
+          await backend.connect();
+          groups.initialize([...(await backend.getDroneStates()).keys()]);
+        } catch (e) {
+          console.error(`[AutoM8te] Initial connect: ${e.message} — will retry on first command`);
+          // Initialize with default drone IDs so tools still register
+          groups.initialize(Array.from({length: DRONE_COUNT}, (_, i) => `drone_${i}`));
+        }
         await detector.start();
-        groups.initialize([...(await backend.getDroneStates()).keys()]);
         return { jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', serverInfo: { name: 'autom8te-intent', version: '2.0.0' }, capabilities: { tools: {} } } };
       case 'tools/list':
         return { jsonrpc: '2.0', id, result: { tools } };
