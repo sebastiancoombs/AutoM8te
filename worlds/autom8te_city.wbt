@@ -1827,10 +1827,6 @@ DEF DRONE_0 Iris {
     "m1_motor, m2_motor, m3_motor, m4_motor"
     "--instance"
     "0"
-    "--camera"
-    "camera"
-    "--camera-port"
-    "5600"
   ]
   extensionSlot [
     Camera {
@@ -1853,10 +1849,6 @@ DEF DRONE_1 Iris {
     "m1_motor, m2_motor, m3_motor, m4_motor"
     "--instance"
     "1"
-    "--camera"
-    "camera"
-    "--camera-port"
-    "5601"
   ]
   extensionSlot [
     Camera {
@@ -1879,10 +1871,6 @@ DEF DRONE_2 Iris {
     "m1_motor, m2_motor, m3_motor, m4_motor"
     "--instance"
     "2"
-    "--camera"
-    "camera"
-    "--camera-port"
-    "5602"
   ]
   extensionSlot [
     Camera {
@@ -1905,10 +1893,6 @@ DEF DRONE_3 Iris {
     "m1_motor, m2_motor, m3_motor, m4_motor"
     "--instance"
     "3"
-    "--camera"
-    "camera"
-    "--camera-port"
-    "5603"
   ]
   extensionSlot [
     Camera {

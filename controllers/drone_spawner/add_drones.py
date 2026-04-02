@@ -28,10 +28,6 @@ DRONE_TEMPLATE_SITL = """DEF DRONE_{id} Iris {{
     "m1_motor, m2_motor, m3_motor, m4_motor"
     "--instance"
     "{id}"
-    "--camera"
-    "camera"
-    "--camera-port"
-    "{camera_port}"
   ]
   extensionSlot [
     Camera {{
