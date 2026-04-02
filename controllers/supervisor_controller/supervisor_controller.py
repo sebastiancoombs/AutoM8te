@@ -30,6 +30,14 @@ try:
 except ImportError:
     HAS_VISION = False
 
+# Tracking + Following
+try:
+    from tracker import ObjectTracker
+    from follow import FollowManager
+    HAS_FOLLOW = True
+except ImportError:
+    HAS_FOLLOW = False
+
 # ─── Drone State ─────────────────────────────────────────────────────
 
 class DroneState:
@@ -151,6 +159,8 @@ class DroneState:
 drones = {}       # drone_id -> DroneState
 supervisor = None
 vision = None     # VisionManager
+trackers = {}     # drone_id -> ObjectTracker
+follow_mgr = None # FollowManager
 lock = threading.Lock()
 
 
@@ -338,6 +348,52 @@ class APIHandler(BaseHTTPRequestHandler):
                         results[did] = "not found"
             self._json(200, {"results": results})
 
+        elif self.path == '/api/follow':
+            # Start following: {"drone_id": "drone_0", "target_class": "car"}
+            # or {"drone_id": "drone_0", "target_id": "car_3"}
+            drone_id = data.get('drone_id')
+            target_class = data.get('target_class')
+            target_id = data.get('target_id')
+            altitude = data.get('altitude', 10)
+
+            if not drone_id:
+                self._json(400, {"error": "drone_id required"})
+                return
+            if not target_class and not target_id:
+                self._json(400, {"error": "target_class or target_id required"})
+                return
+
+            if follow_mgr:
+                follow_mgr.start_follow(drone_id, target_id=target_id,
+                                        target_class=target_class, altitude=altitude)
+                self._json(200, {
+                    "status": f"{drone_id} following {target_id or target_class}",
+                    "drone_id": drone_id,
+                })
+            else:
+                self._json(500, {"error": "follow system not available"})
+
+        elif self.path == '/api/follow/stop':
+            drone_id = data.get('drone_id')
+            if drone_id and follow_mgr:
+                follow_mgr.stop_follow(drone_id)
+            elif follow_mgr:
+                follow_mgr.stop_all()
+            self._json(200, {"status": "stopped"})
+
+        elif self.path == '/api/follow/status':
+            if follow_mgr:
+                self._json(200, {"follow": follow_mgr.get_status()})
+            else:
+                self._json(200, {"follow": {}})
+
+        elif self.path == '/api/tracks':
+            # Get all tracked objects
+            all_tracks = {}
+            for did, tracker in trackers.items():
+                all_tracks[did] = tracker.to_dict()
+            self._json(200, {"tracks": all_tracks})
+
         elif self.path == '/api/emergency':
             with lock:
                 for d in drones.values():
@@ -403,6 +459,15 @@ def main():
         return
 
     print(f"[AutoM8te] {len(drones)} drones registered")
+
+    # Initialize trackers and follow manager
+    if HAS_FOLLOW:
+        follow_mgr_local = FollowManager()
+        for did in drones:
+            trackers[did] = ObjectTracker()
+            follow_mgr_local.add_drone(did)
+        globals()['follow_mgr'] = follow_mgr_local
+        print(f"[AutoM8te] Follow system initialized ({len(drones)} trackers)")
 
     # Start HTTP server in background thread
     http_thread = threading.Thread(target=start_http, daemon=True)
