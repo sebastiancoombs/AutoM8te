@@ -183,7 +183,11 @@ echo
 # ─── Step 4: Start DroneKit Server ──────────────────────────────────
 echo -e "${CYAN}[4/4] Starting DroneKit server...${NC}"
 
-DRONEKIT_PORT=$((SITL_BASE_PORT + 2))  # SERIAL1: 5762
+# Wait for Webots to connect to SITL (controllers need to init first)
+echo -e "  Waiting for SITL to be ready..."
+sleep 10
+
+DRONEKIT_PORT=$SITL_BASE_PORT  # SERIAL0: 5760 (Webots uses UDP 9002, not TCP)
 
 python3 "$SCRIPT_DIR/dronekit_server.py" \
     --count "$DRONE_COUNT" \

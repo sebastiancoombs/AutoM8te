@@ -34,12 +34,19 @@ def connect_drones(count, base_port, port_step):
         drone_id = f"drone_{i}"
         port = base_port + i * port_step
         print(f"Connecting to {drone_id} on tcp:127.0.0.1:{port}...")
-        try:
-            v = connect(f'tcp:127.0.0.1:{port}', wait_ready=True, timeout=60)
-            vehicles[drone_id] = v
-            print(f"  ✓ {drone_id} connected (mode: {v.mode.name}, armed: {v.armed})")
-        except Exception as e:
-            print(f"  ✗ {drone_id} failed: {e}")
+        # Retry loop — SITL may still be initializing
+        for attempt in range(6):
+            try:
+                v = connect(f'tcp:127.0.0.1:{port}', wait_ready=True, timeout=30)
+                vehicles[drone_id] = v
+                print(f"  ✓ {drone_id} connected (mode: {v.mode.name}, armed: {v.armed})")
+                break
+            except Exception as e:
+                if attempt < 5:
+                    print(f"  Attempt {attempt+1} failed: {e} — retrying in 5s...")
+                    time.sleep(5)
+                else:
+                    print(f"  ✗ {drone_id} failed after 6 attempts: {e}")
 
 
 def get_drone_state(drone_id, v):
