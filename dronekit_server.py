@@ -21,10 +21,18 @@ from flask import Flask, jsonify, request
 
 from dronekit import connect, VehicleMode, LocationGlobalRelative
 
+# Optional: pymavswarm for swarm-level operations
+try:
+    from pymavswarm import MavSwarm
+    HAS_PYMAVSWARM = True
+except ImportError:
+    HAS_PYMAVSWARM = False
+
 app = Flask(__name__)
 
 # Global state
 vehicles = {}  # drone_id -> Vehicle
+swarm = None   # MavSwarm instance (if available)
 vehicle_lock = threading.Lock()
 
 
@@ -218,6 +226,65 @@ def emergency():
     return jsonify({"status": "emergency disarm sent to all"})
 
 
+# ─── Intercept Mission ───────────────────────────────────────────────
+
+interceptor_coordinator = None
+
+try:
+    from interceptor.mission import InterceptCoordinator
+    HAS_INTERCEPTOR = True
+except ImportError:
+    HAS_INTERCEPTOR = False
+
+
+@app.route('/api/intercept', methods=['POST'])
+def intercept():
+    """
+    Start intercept mission.
+    
+    Body: {
+        "targets": {
+            "enemy_0": {"position": [x,y,z], "velocity": [vx,vy,vz]},
+            ...
+        }
+    }
+    """
+    if not HAS_INTERCEPTOR:
+        return jsonify({"error": "interceptor module not available"}), 500
+
+    global interceptor_coordinator
+    data = request.json or {}
+    targets = data.get("targets", {})
+
+    if not targets:
+        return jsonify({"error": "no targets provided"}), 400
+
+    # Create coordinator if needed
+    if interceptor_coordinator is None:
+        interceptor_coordinator = InterceptCoordinator()
+        for did in vehicles:
+            interceptor_coordinator.add_interceptor(did, vehicles[did])
+
+    # Update targets and assign
+    interceptor_coordinator.update_targets(targets)
+    assignments = interceptor_coordinator.execute_assignment()
+
+    return jsonify({
+        "status": "intercept mission started",
+        "assignments": [(a, b) for a, b in assignments],
+        "targets": len(targets),
+        "interceptors": len(vehicles),
+    })
+
+
+@app.route('/api/intercept/status', methods=['GET'])
+def intercept_status():
+    """Get intercept mission status."""
+    if interceptor_coordinator is None:
+        return jsonify({"error": "no intercept mission active"}), 404
+    return jsonify(interceptor_coordinator.get_status())
+
+
 # ─── Main ────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
@@ -232,6 +299,7 @@ if __name__ == '__main__':
     print(f"  Drones: {args.count}")
     print(f"  Ports: {args.base_port} to {args.base_port + (args.count-1) * args.port_step}")
     print(f"  HTTP: :{args.http_port}")
+    print(f"  pymavswarm: {'✓ available' if HAS_PYMAVSWARM else '✗ not installed'}")
     print()
 
     connect_drones(args.count, args.base_port, args.port_step)

@@ -189,7 +189,16 @@ sleep 10
 
 DRONEKIT_PORT=$SITL_BASE_PORT  # SERIAL0: 5760 (Webots uses UDP 9002, not TCP)
 
-python3 "$SCRIPT_DIR/dronekit_server.py" \
+# Use Python 3.10 venv if available (needed for pymavswarm)
+if [ -f "$SCRIPT_DIR/venv310/bin/python" ]; then
+    PYTHON="$SCRIPT_DIR/venv310/bin/python"
+    echo -e "  Using Python 3.10 venv (pymavswarm enabled)"
+else
+    PYTHON="python3"
+    echo -e "  Using system Python (pymavswarm may not be available)"
+fi
+
+"$PYTHON" "$SCRIPT_DIR/dronekit_server.py" \
     --count "$DRONE_COUNT" \
     --base-port "$DRONEKIT_PORT" \
     --port-step 10 \
