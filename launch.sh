@@ -180,40 +180,18 @@ else
 fi
 echo
 
-# ─── Step 4: Start Intent Layer ─────────────────────────────────────
-echo -e "${CYAN}[4/4] Starting intent layer...${NC}"
+# ─── Step 4: Start DroneKit Server ──────────────────────────────────
+echo -e "${CYAN}[4/4] Starting DroneKit server...${NC}"
 
-# Install deps if needed
-if [ ! -d "$INTENT_LAYER/node_modules" ] || [ "$INTENT_LAYER/package.json" -nt "$INTENT_LAYER/node_modules/.package-lock.json" ]; then
-    echo -e "  Installing dependencies..."
-    (cd "$INTENT_LAYER" && npm install --silent)
-fi
+DRONEKIT_PORT=$((SITL_BASE_PORT + 2))  # SERIAL1: 5762
 
-# Build SITL TCP port list for the bridge
-# SERIAL0 (5760) is used by Webots controller, use SERIAL1 (5762) for MAVLink bridge
-MAVLINK_PORTS=""
-for i in $(seq 0 $((DRONE_COUNT - 1))); do
-    PORT=$((SITL_BASE_PORT + i * 10 + 2))  # +2 = SERIAL1 port
-    if [ -z "$MAVLINK_PORTS" ]; then
-        MAVLINK_PORTS="$PORT"
-    else
-        MAVLINK_PORTS="$MAVLINK_PORTS,$PORT"
-    fi
-done
-
-# Start intent layer — use 'webots' backend when Webots is running, 'ardupilot' for headless
-if [ "$EXTRA_ARGS" = "--no-webots" ]; then
-    BACKEND_MODE="ardupilot"
-else
-    BACKEND_MODE="webots"
-fi
-AUTOM8TE_BACKEND="$BACKEND_MODE" \
-AUTOM8TE_DRONES="$DRONE_COUNT" \
-AUTOM8TE_MAVLINK_PORTS="$MAVLINK_PORTS" \
-AUTOM8TE_PORT=8080 \
-node "$INTENT_LAYER/server.js" &
+python3 "$SCRIPT_DIR/dronekit_server.py" \
+    --count "$DRONE_COUNT" \
+    --base-port "$DRONEKIT_PORT" \
+    --port-step 10 \
+    --http-port 8080 &
 PIDS+=($!)
-echo -e "  ${GREEN}✓${NC} Intent layer started on port 8080 (backend: $BACKEND_MODE, PID ${PIDS[-1]})"
+echo -e "  ${GREEN}✓${NC} DroneKit server starting on port 8080 (PID ${PIDS[-1]})"
 
 echo
 echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
@@ -221,9 +199,7 @@ echo -e "${GREEN}║       AutoM8te is running!           ║${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║  Drones:  $DRONE_COUNT                          ║${NC}"
 echo -e "${GREEN}║  API:     http://localhost:8080      ║${NC}"
-echo -e "${GREEN}║  Status:  GET /api/status            ║${NC}"
-echo -e "${GREEN}║  Tools:   GET /api/tools             ║${NC}"
-echo -e "${GREEN}║  Command: POST /api/tool             ║${NC}"
+echo -e "${GREEN}║  Backend: DroneKit                   ║${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║  Press Ctrl+C to stop everything     ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════╝${NC}"
@@ -231,9 +207,9 @@ echo
 echo -e "${CYAN}Quick test:${NC}"
 echo "  curl -s http://localhost:8080/api/status | python3 -m json.tool"
 echo
-echo "  curl -s -X POST http://localhost:8080/api/tool \\"
+echo "  curl -s -X POST http://localhost:8080/api/takeoff \\"
 echo "    -H 'Content-Type: application/json' \\"
-echo "    -d '{\"name\": \"drone_command\", \"args\": {\"action\": \"takeoff\"}}'"
+echo "    -d '{\"altitude\": 5}'"
 echo
 
 # Wait for any child to exit
