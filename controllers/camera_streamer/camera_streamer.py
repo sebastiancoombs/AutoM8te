@@ -76,9 +76,36 @@ def stream_camera(robot, camera, port):
             client = None
 
 
+MOTOR_NAMES = ["m1_motor", "m2_motor", "m3_motor", "m4_motor"]
+MOTOR_SPIN_VELOCITY = 80.0  # rad/s visual spin
+
+
+def setup_motors(robot):
+    """Set up propeller motors for continuous visual spin."""
+    motors = []
+    for i, name in enumerate(MOTOR_NAMES):
+        try:
+            motor = robot.getDevice(name)
+            if motor:
+                motor.setPosition(float('inf'))  # Continuous rotation mode
+                vel = MOTOR_SPIN_VELOCITY if i % 2 == 0 else -MOTOR_SPIN_VELOCITY
+                motor.setVelocity(vel)
+                motors.append(motor)
+            else:
+                print(f"[Camera] {robot.getName()} motor '{name}' not found")
+        except Exception as e:
+            print(f"[Camera] {robot.getName()} motor '{name}' error: {e}")
+    return motors
+
+
 def main():
     robot = Robot()
     instance = get_instance_from_name(robot)
+
+    # Spin propellers immediately
+    motors = setup_motors(robot)
+    if motors:
+        print(f"[Camera] {robot.getName()} spinning {len(motors)} propellers")
 
     # Enable camera
     camera = robot.getDevice("camera")
