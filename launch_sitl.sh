@@ -102,7 +102,7 @@ fi
 # ─── Step 5: Start DroneKit Bridge ──────────────────────────────────
 echo -e "${CYAN}[5/6] Starting DroneKit Bridge on :8080...${NC}"
 cd "$SCRIPT_DIR"
-python3 dronekit_bridge.py --drones "$DRONE_COUNT" --base-port 5760 --http-port 8070 \
+python3 dronekit_bridge.py --drones "$DRONE_COUNT" --base-port 14550 --http-port 8070 \
     > "$SCRIPT_DIR/logs/bridge.log" 2>&1 &
 PIDS+=($!)
 echo "  Waiting 60s for DroneKit to connect to all SITL instances..."

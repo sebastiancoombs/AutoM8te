@@ -23,11 +23,11 @@ lock = threading.Lock()
 
 
 def connect_drones(count, base_port):
-    """Connect to N SITL instances via TCP."""
+    """Connect to N SITL instances via UDP (MAVProxy --out ports)."""
     for i in range(count):
         port = base_port + i * 10
         drone_id = f"drone_{i}"
-        addr = f"tcp:127.0.0.1:{port}"
+        addr = f"udp:127.0.0.1:{port}"
         print(f"[Bridge] Connecting {drone_id} → {addr}...")
         try:
             vehicle = connect(addr, wait_ready=True, timeout=60)
@@ -231,7 +231,7 @@ class APIHandler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description='DroneKit Bridge')
     parser.add_argument('--drones', type=int, default=4)
-    parser.add_argument('--base-port', type=int, default=5760)
+    parser.add_argument('--base-port', type=int, default=14550)
     parser.add_argument('--http-port', type=int, default=8080)
     args = parser.parse_args()
 
