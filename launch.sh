@@ -129,7 +129,7 @@ for i in $(seq 0 $((DRONE_COUNT - 1))); do
         --model webots-python \
         --instance "$i" \
         --home "-35.363261,149.165230,584,353" \
-        --defaults "$ARDUPILOT_HOME/Tools/autotest/default_params/copter.parm" \
+        --defaults "$ARDUPILOT_HOME/Tools/autotest/default_params/copter.parm,$SCRIPT_DIR/config/sitl_params.parm" \
         > "$SITL_LOG_DIR/sitl_$i.log" 2>&1 &
     PIDS+=($!)
     echo -e "  ${GREEN}✓${NC} SITL $i started (PID ${PIDS[-1]})"

@@ -1,0 +1,9 @@
+# AutoM8te SITL Parameters
+# Relaxed prearm checks for Webots simulation
+# (Webots can't maintain 400Hz with multiple drones)
+
+# Disable loop rate prearm check
+ARMING_CHECK 0
+
+# Slower loop rate acceptable in sim
+SCHED_LOOP_RATE 50
