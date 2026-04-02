@@ -344,10 +344,6 @@ class APIHandler(BaseHTTPRequestHandler):
                     d.speed = speed
                     d.mode = "GUIDED"
                     results[did] = f"moving to ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})"
-                    elif d:
-                        results[did] = "not armed"
-                    else:
-                        results[did] = "not found"
             self._json(200, {"results": results})
 
         elif self.path == '/api/follow_path':
