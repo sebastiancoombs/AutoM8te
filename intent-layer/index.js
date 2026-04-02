@@ -40,23 +40,9 @@ if (PERCEPTION === 'yolo') {
 }
 
 // --- Backend resolution ---
-// Auto-detect: try dronekit bridge first, then supervisor, then mock
+// No fallback — use what's configured
 if (BACKEND === 'auto') {
-  try {
-    const res = await fetch('http://localhost:8070/api/status', { signal: AbortSignal.timeout(1000) });
-    const data = await res.json();
-    if (data.backend === 'dronekit-sitl') {
-      BACKEND = 'dronekit';
-    } else if (data.backend === 'webots-supervisor') {
-      BACKEND = 'supervisor';
-    } else {
-      BACKEND = 'supervisor'; // Default to supervisor if unknown backend
-    }
-    console.error(`[AutoM8te] Auto-detected backend: ${BACKEND}`);
-  } catch {
-    BACKEND = 'mock';
-    console.error('[AutoM8te] No backend found — using mock');
-  }
+  BACKEND = 'dronekit';
 }
 
 // --- Backend ---
