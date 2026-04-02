@@ -1,2 +1,3 @@
 # AutoM8te SITL Parameters
-# Default ArduPilot settings — no modifications
+# Standard SITL simulation config — bypass prearm for Webots timing
+ARMING_CHECK 0
