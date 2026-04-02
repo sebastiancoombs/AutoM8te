@@ -144,8 +144,15 @@ class APIHandler(BaseHTTPRequestHandler):
                     results[did] = "not found"
                     continue
                 if not v.armed:
-                    results[did] = "not armed"
-                    continue
+                    v.mode = VehicleMode("GUIDED")
+                    v.armed = True
+                    for _ in range(10):
+                        if v.armed:
+                            break
+                        time.sleep(0.5)
+                    if not v.armed:
+                        results[did] = "failed to arm"
+                        continue
                 if lat and lon:
                     # Absolute position
                     v.simple_goto(LocationGlobalRelative(lat, lon, alt))
@@ -187,9 +194,16 @@ class APIHandler(BaseHTTPRequestHandler):
             results = {}
             for did, pos in positions.items():
                 v = vehicles.get(did)
-                if not v or not v.armed:
-                    results[did] = "not found or not armed"
+                if not v:
+                    results[did] = "not found"
                     continue
+                if not v.armed:
+                    v.mode = VehicleMode("GUIDED")
+                    v.armed = True
+                    for _ in range(10):
+                        if v.armed:
+                            break
+                        time.sleep(0.5)
                 if len(pos) == 3:
                     # Treat as relative meters from home
                     home = v.home_location
