@@ -22,7 +22,9 @@ import { PyBulletAdapter } from './adapters/pybullet.js';
 import { ArduPilotAdapter } from './adapters/ardupilot.js';
 
 // --- Configuration ---
-const BACKEND = process.env.AUTOM8TE_BACKEND || 'mock';
+// Auto-detect backend: check if Supervisor is running on 8080
+const SUPERVISOR_URL = process.env.AUTOM8TE_SUPERVISOR_URL || 'http://localhost:8080';
+let BACKEND = process.env.AUTOM8TE_BACKEND || 'auto';
 const DRONE_COUNT = parseInt(process.env.AUTOM8TE_DRONES || '4', 10);
 const GUI = process.env.AUTOM8TE_GUI === 'true';
 const PERCEPTION = process.env.AUTOM8TE_PERCEPTION || 'mock';
@@ -37,9 +39,28 @@ if (PERCEPTION === 'yolo') {
   detector = new MockDetector();
 }
 
+// --- Auto-detect backend ---
+if (BACKEND === 'auto') {
+  try {
+    const res = await fetch(`${SUPERVISOR_URL}/api/status`, { signal: AbortSignal.timeout(2000) });
+    if (res.ok) {
+      BACKEND = 'supervisor';
+      console.error('[AutoM8te] Auto-detected Supervisor on ' + SUPERVISOR_URL);
+    }
+  } catch {
+    BACKEND = 'mock';
+    console.error('[AutoM8te] No Supervisor found — using mock backend');
+  }
+}
+
 // --- Backend ---
 let backend;
 switch (BACKEND) {
+  case 'supervisor': {
+    const { SupervisorAdapter } = await import('./adapters/supervisor.js');
+    backend = new SupervisorAdapter({ droneCount: DRONE_COUNT });
+    break;
+  }
   case 'webots':
     backend = new ArduPilotAdapter({ droneCount: DRONE_COUNT, backend: 'webots', ardupilotPath: ARDUPILOT_PATH });
     break;
