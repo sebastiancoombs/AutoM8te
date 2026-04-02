@@ -39,18 +39,10 @@ if (PERCEPTION === 'yolo') {
   detector = new MockDetector();
 }
 
-// --- Auto-detect backend ---
+// --- Backend resolution ---
+// Default to supervisor. No silent fallback — if Webots isn't running, fail loud.
 if (BACKEND === 'auto') {
-  try {
-    const res = await fetch(`${SUPERVISOR_URL}/api/status`, { signal: AbortSignal.timeout(2000) });
-    if (res.ok) {
-      BACKEND = 'supervisor';
-      console.error('[AutoM8te] Auto-detected Supervisor on ' + SUPERVISOR_URL);
-    }
-  } catch {
-    BACKEND = 'mock';
-    console.error('[AutoM8te] No Supervisor found — using mock backend');
-  }
+  BACKEND = 'supervisor';
 }
 
 // --- Backend ---
