@@ -1818,16 +1818,20 @@ Pedestrian {
 }
 
 # === AUTOM8TE DRONES START ===
-DEF SUPERVISOR Robot {
-  name "supervisor"
-  controller "supervisor_controller"
-  supervisor TRUE
-}
 DEF DRONE_0 Iris {
   translation -47.5 42.5 0.4
   name "drone_0"
-  controller "camera_streamer"
-  supervisor FALSE
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--instance"
+    "0"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5600"
+  ]
   extensionSlot [
     Camera {
       name "camera"
@@ -1843,8 +1847,17 @@ DEF DRONE_0 Iris {
 DEF DRONE_1 Iris {
   translation -42.5 42.5 0.4
   name "drone_1"
-  controller "camera_streamer"
-  supervisor FALSE
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--instance"
+    "1"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5601"
+  ]
   extensionSlot [
     Camera {
       name "camera"
@@ -1860,8 +1873,17 @@ DEF DRONE_1 Iris {
 DEF DRONE_2 Iris {
   translation -47.5 47.5 0.4
   name "drone_2"
-  controller "camera_streamer"
-  supervisor FALSE
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--instance"
+    "2"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5602"
+  ]
   extensionSlot [
     Camera {
       name "camera"
@@ -1877,8 +1899,17 @@ DEF DRONE_2 Iris {
 DEF DRONE_3 Iris {
   translation -42.5 47.5 0.4
   name "drone_3"
-  controller "camera_streamer"
-  supervisor FALSE
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [
+    "--motors"
+    "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--instance"
+    "3"
+    "--camera"
+    "camera"
+    "--camera-port"
+    "5603"
+  ]
   extensionSlot [
     Camera {
       name "camera"

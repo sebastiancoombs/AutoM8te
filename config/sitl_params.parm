@@ -1,4 +1,2 @@
 # AutoM8te SITL Parameters
-# Full prearm checks enabled — basicTimeStep 2 gives 500Hz
-
-SCHED_LOOP_RATE 400
+# Default ArduPilot settings — no modifications
