@@ -49,7 +49,7 @@ DRONE_TEMPLATE_SITL = """DEF DRONE_{id} Iris {{
 DRONE_TEMPLATE_SUPERVISOR = """DEF DRONE_{id} Iris {{
   translation {x} {y} {z}
   name "drone_{id}"
-  controller "<none>"
+  controller "camera_streamer"
   supervisor FALSE
   extensionSlot [
     Camera {{

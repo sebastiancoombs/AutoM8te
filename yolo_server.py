@@ -23,7 +23,7 @@ from ultralytics import YOLO
 # ─── Camera Stream Reader ────────────────────────────────────────────
 
 class CameraStream:
-    """Reads grayscale images from Webots camera stream port."""
+    """Reads RGB frames from camera_streamer TCP stream (length-prefixed)."""
 
     def __init__(self, drone_id, port, width=640, height=480):
         self.drone_id = drone_id
@@ -32,7 +32,9 @@ class CameraStream:
         self.height = height
         self.frame = None
         self.connected = False
+        self.sock = None
         self.lock = threading.Lock()
+        self.frame_count = 0
 
     def connect(self):
         """Connect to camera stream port."""
@@ -44,29 +46,47 @@ class CameraStream:
             print(f"[YOLO] Connected to {self.drone_id} camera on port {self.port}")
             return True
         except Exception as e:
-            print(f"[YOLO] Cannot connect to {self.drone_id} camera port {self.port}: {e}")
+            if self.sock:
+                self.sock.close()
+            self.sock = None
+            self.connected = False
             return False
 
+    def _recv_exact(self, n):
+        """Receive exactly n bytes."""
+        data = b''
+        while len(data) < n:
+            chunk = self.sock.recv(n - len(data))
+            if not chunk:
+                raise ConnectionError("Connection closed")
+            data += chunk
+        return data
+
     def read_frame(self):
-        """Read one frame from the stream."""
+        """Read one length-prefixed RGB frame."""
         if not self.connected:
             return None
         try:
-            # Webots streams grayscale images as raw bytes
-            frame_size = self.width * self.height
-            data = b''
-            while len(data) < frame_size:
-                chunk = self.sock.recv(frame_size - len(data))
-                if not chunk:
-                    self.connected = False
-                    return None
-                data += chunk
-            frame = np.frombuffer(data, dtype=np.uint8).reshape(self.height, self.width)
+            # Read 4-byte length header (big-endian uint32)
+            header = self._recv_exact(4)
+            frame_size = struct.unpack('>I', header)[0]
+
+            # Read RGB frame data
+            data = self._recv_exact(frame_size)
+
+            # Reshape to HxWx3 RGB
+            frame = np.frombuffer(data, dtype=np.uint8).reshape(self.height, self.width, 3)
+
             with self.lock:
                 self.frame = frame
+                self.frame_count += 1
+
             return frame
-        except Exception:
+        except Exception as e:
             self.connected = False
+            if self.sock:
+                self.sock.close()
+            self.sock = None
             return None
 
     def get_latest(self):
@@ -182,8 +202,12 @@ class YOLOHandler(BaseHTTPRequestHandler):
         elif self.path == '/api/vision/status':
             self._json(200, {
                 "model": "yolov8n",
+                "tracker": "BoT-SORT (built-in)",
                 "classes": len(detector.model.names),
-                "cameras": {did: cam.connected for did, cam in detector.cameras.items()},
+                "cameras": {
+                    did: {"connected": cam.connected, "frames": cam.frame_count}
+                    for did, cam in detector.cameras.items()
+                },
                 "cached_detections": {did: len(dets) for did, dets in detector.get_cached().items()},
             })
 
@@ -197,11 +221,12 @@ def camera_reader(cam):
     """Continuously read frames from a camera stream."""
     while True:
         if not cam.connected:
-            cam.connect()
-            time.sleep(1)
-            continue
-        cam.read_frame()
-        time.sleep(0.1)  # 10 fps
+            if not cam.connect():
+                time.sleep(3)  # Retry every 3 seconds
+                continue
+        frame = cam.read_frame()
+        if frame is None and not cam.connected:
+            time.sleep(1)  # Reconnect delay
 
 
 # ─── Main ────────────────────────────────────────────────────────────
