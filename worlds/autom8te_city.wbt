@@ -59,7 +59,11 @@ IMPORTABLE EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R20
 
 WorldInfo {
   ERP 0.6
-  basicTimeStep 10
+  basicTimeStep 8
+  defaultDamping Damping {
+    linear 0.5
+    angular 0.5
+  }
   lineScale 1
   contactProperties [
     ContactProperties {
