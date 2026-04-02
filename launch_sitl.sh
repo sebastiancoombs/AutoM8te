@@ -63,7 +63,6 @@ for i in $(seq 0 $((DRONE_COUNT - 1))); do
         --model webots-python \
         -I$i \
         --no-rebuild \
-        --no-mavproxy \
         --add-param-file="$PARAMS_FILE" \
         > "$SCRIPT_DIR/logs/sitl_instance_$i.log" 2>&1 &
     PIDS+=($!)
