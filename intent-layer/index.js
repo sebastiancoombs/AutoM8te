@@ -43,7 +43,7 @@ if (PERCEPTION === 'yolo') {
 // Auto-detect: try dronekit bridge first, then supervisor, then mock
 if (BACKEND === 'auto') {
   try {
-    const res = await fetch('http://localhost:8080/api/status', { signal: AbortSignal.timeout(1000) });
+    const res = await fetch('http://localhost:8070/api/status', { signal: AbortSignal.timeout(1000) });
     const data = await res.json();
     if (data.backend === 'dronekit-sitl') {
       BACKEND = 'dronekit';

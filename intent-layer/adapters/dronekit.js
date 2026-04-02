@@ -12,7 +12,7 @@
  * the bridge translates HTTP → DroneKit → MAVLink → SITL.
  */
 
-const BRIDGE_URL = process.env.DRONEKIT_BRIDGE_URL || 'http://localhost:8080';
+const BRIDGE_URL = process.env.DRONEKIT_BRIDGE_URL || 'http://localhost:8070';
 
 async function fetchJSON(path, method = 'GET', body = null) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
