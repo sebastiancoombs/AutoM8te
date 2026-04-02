@@ -96,16 +96,27 @@ class DroneState:
             self.velocity = [0, 0, 0]
             return
 
+        # Validate target has no None values
+        if any(v is None for v in self.target):
+            self.velocity = [0, 0, 0]
+            return
+
         pos = self.position
         dx = self.target[0] - pos[0]
         dy = self.target[1] - pos[1]
         dz = self.target[2] - pos[2]
         dist = math.sqrt(dx*dx + dy*dy + dz*dz)
 
-        # Waypoint reached threshold — tighter for paths, looser for single targets
+        # Waypoint reached threshold
         threshold = 0.5 if self.path else 0.3
 
         if dist < threshold:
+            # Arrived at target — snap to exact position to prevent bouncing
+            if not self.path:
+                self.position = [self.target[0], self.target[1], self.target[2]]
+                self.velocity = [0, 0, 0]
+                self.mode = "HOVER"
+                return  # Keep target so we hold position
             if self.path:
                 self._advance_path()
                 if self.target is None:
@@ -318,11 +329,21 @@ class APIHandler(BaseHTTPRequestHandler):
             with lock:
                 for did, pos in positions.items():
                     d = drones.get(did)
-                    if d and d.armed:
-                        d.target = pos
-                        d.speed = speed
-                        d.mode = "GUIDED"
-                        results[did] = f"moving to ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})"
+                    if not d:
+                        results[did] = "not found"
+                        continue
+                    if not d.armed:
+                        results[did] = "not armed"
+                        continue
+                    # Validate position values
+                    if not isinstance(pos, list) or len(pos) < 3 or any(v is None for v in pos):
+                        results[did] = f"invalid position: {pos}"
+                        continue
+                    pos = [float(v) for v in pos]
+                    d.target = pos
+                    d.speed = speed
+                    d.mode = "GUIDED"
+                    results[did] = f"moving to ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})"
                     elif d:
                         results[did] = "not armed"
                     else:
