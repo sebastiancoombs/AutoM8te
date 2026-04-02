@@ -104,5 +104,15 @@ else
     echo -e "\n${YELLOW}Some instances didn't connect. Check /tmp/sitl_instance_*.log${NC}"
 fi
 
+# ─── Step 5: Start DroneKit Bridge ──────────────────────────────────
+echo -e "${CYAN}[5/5] Starting DroneKit Bridge on :8080...${NC}"
+cd "$SCRIPT_DIR"
+python3 dronekit_bridge.py --drones "$DRONE_COUNT" --base-port 5760 --http-port 8080 &
+PIDS+=($!)
+
+echo -e "\n${GREEN}╔══════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║   Bridge API: http://localhost:8080  ║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════╝${NC}"
+
 echo -e "\n${CYAN}Press Ctrl+C to stop all.${NC}"
 wait
