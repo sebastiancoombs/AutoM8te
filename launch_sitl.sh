@@ -105,13 +105,26 @@ else
 fi
 
 # ─── Step 5: Start DroneKit Bridge ──────────────────────────────────
-echo -e "${CYAN}[5/5] Starting DroneKit Bridge on :8080...${NC}"
+echo -e "${CYAN}[5/6] Starting DroneKit Bridge on :8080...${NC}"
 cd "$SCRIPT_DIR"
 python3 dronekit_bridge.py --drones "$DRONE_COUNT" --base-port 5760 --http-port 8080 &
 PIDS+=($!)
+echo "  Waiting 60s for DroneKit to connect to all SITL instances..."
+sleep 60
+
+# ─── Step 6: Start Intent Layer ──────────────────────────────────────
+echo -e "${CYAN}[6/6] Starting Intent Layer on :9090...${NC}"
+cd "$SCRIPT_DIR/intent-layer"
+AUTOM8TE_BACKEND=dronekit AUTOM8TE_DRONES=$DRONE_COUNT node server.js &
+PIDS+=($!)
+cd "$SCRIPT_DIR"
 
 echo -e "\n${GREEN}╔══════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║   Bridge API: http://localhost:8080  ║${NC}"
+echo -e "${GREEN}║   AutoM8te SITL Stack Running!       ║${NC}"
+echo -e "${GREEN}╠══════════════════════════════════════╣${NC}"
+echo -e "${GREEN}║   Bridge:  http://localhost:8080     ║${NC}"
+echo -e "${GREEN}║   Intent:  http://localhost:9090     ║${NC}"
+echo -e "${GREEN}║   Drones:  $DRONE_COUNT (ArduPilot SITL)          ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════╝${NC}"
 
 echo -e "\n${CYAN}Press Ctrl+C to stop all.${NC}"

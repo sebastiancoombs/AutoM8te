@@ -40,14 +40,33 @@ if (PERCEPTION === 'yolo') {
 }
 
 // --- Backend resolution ---
-// Default to supervisor. Connects lazily — no startup wait.
+// Auto-detect: try dronekit bridge first, then supervisor, then mock
 if (BACKEND === 'auto') {
-  BACKEND = 'supervisor';
+  try {
+    const res = await fetch('http://localhost:8080/api/status', { signal: AbortSignal.timeout(1000) });
+    const data = await res.json();
+    if (data.backend === 'dronekit-sitl') {
+      BACKEND = 'dronekit';
+    } else if (data.backend === 'webots-supervisor') {
+      BACKEND = 'supervisor';
+    } else {
+      BACKEND = 'supervisor'; // Default to supervisor if unknown backend
+    }
+    console.error(`[AutoM8te] Auto-detected backend: ${BACKEND}`);
+  } catch {
+    BACKEND = 'mock';
+    console.error('[AutoM8te] No backend found — using mock');
+  }
 }
 
 // --- Backend ---
 let backend;
 switch (BACKEND) {
+  case 'dronekit': {
+    const { DroneKitAdapter } = await import('./adapters/dronekit.js');
+    backend = new DroneKitAdapter({ droneCount: DRONE_COUNT });
+    break;
+  }
   case 'supervisor': {
     const { SupervisorAdapter } = await import('./adapters/supervisor.js');
     backend = new SupervisorAdapter({ droneCount: DRONE_COUNT });
