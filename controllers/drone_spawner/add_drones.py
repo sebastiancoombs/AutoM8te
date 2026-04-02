@@ -19,7 +19,7 @@ WORLD_FILE = os.path.join(SCRIPT_DIR, "../../worlds/autom8te_city.wbt")
 DRONE_MARKER_START = "# === AUTOM8TE DRONES START ==="
 DRONE_MARKER_END = "# === AUTOM8TE DRONES END ==="
 
-DRONE_TEMPLATE = """DEF DRONE_{id} Iris {{
+DRONE_TEMPLATE_SITL = """DEF DRONE_{id} Iris {{
   translation {x} {y} {z}
   name "drone_{id}"
   controller "ardupilot_vehicle_controller"
@@ -44,6 +44,30 @@ DRONE_TEMPLATE = """DEF DRONE_{id} Iris {{
       near 0.1
     }}
   ]
+}}"""
+
+DRONE_TEMPLATE_SUPERVISOR = """DEF DRONE_{id} Iris {{
+  translation {x} {y} {z}
+  name "drone_{id}"
+  controller "<none>"
+  supervisor FALSE
+  extensionSlot [
+    Camera {{
+      name "camera"
+      translation 0.2 0 0.01
+      rotation 0 0 1 0
+      width 640
+      height 480
+      fieldOfView 1.2
+      near 0.1
+    }}
+  ]
+}}"""
+
+SUPERVISOR_NODE = """DEF SUPERVISOR Robot {{
+  name "supervisor"
+  controller "supervisor_controller"
+  supervisor TRUE
 }}"""
 
 
@@ -73,6 +97,8 @@ def main():
     parser.add_argument("--altitude", type=float, default=0.4)
     parser.add_argument("--camera-port-base", type=int, default=5600)
     parser.add_argument("--world", type=str, default=WORLD_FILE)
+    parser.add_argument("--mode", choices=["sitl", "supervisor"], default="supervisor",
+                        help="sitl = ArduPilot SITL per drone, supervisor = Webots Supervisor controls all")
     args = parser.parse_args()
 
     world_path = os.path.abspath(args.world)
@@ -109,10 +135,17 @@ def main():
         args.center_x, args.center_y, args.altitude
     )
 
+    template = DRONE_TEMPLATE_SITL if args.mode == "sitl" else DRONE_TEMPLATE_SUPERVISOR
+
     drones_section = f"\n{DRONE_MARKER_START}\n"
+
+    # Add supervisor node if in supervisor mode
+    if args.mode == "supervisor":
+        drones_section += SUPERVISOR_NODE.format() + "\n"
+
     for i, (x, y, z) in enumerate(positions):
         camera_port = args.camera_port_base + i
-        drones_section += DRONE_TEMPLATE.format(
+        drones_section += template.format(
             id=i, x=x, y=y, z=z, camera_port=camera_port
         )
         drones_section += "\n"
