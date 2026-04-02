@@ -63,6 +63,8 @@ for i in $(seq 0 $((DRONE_COUNT - 1))); do
         --model webots-python \
         -I$i \
         --no-rebuild \
+        --no-mavproxy \
+        --out="udp:127.0.0.1:$((14550 + i * 10))" \
         --add-param-file="$PARAMS_FILE" \
         > "$SCRIPT_DIR/logs/sitl_instance_$i.log" 2>&1 &
     PIDS+=($!)
@@ -108,7 +110,7 @@ fi
 # ─── Step 5: Start DroneKit Bridge ──────────────────────────────────
 echo -e "${CYAN}[5/6] Starting DroneKit Bridge on :8080...${NC}"
 cd "$SCRIPT_DIR"
-python3 dronekit_bridge.py --drones "$DRONE_COUNT" --base-port 5760 --http-port 8070 \
+python3 dronekit_bridge.py --drones "$DRONE_COUNT" --base-port 14550 --http-port 8070 \
     > "$SCRIPT_DIR/logs/bridge.log" 2>&1 &
 PIDS+=($!)
 echo "  Waiting 60s for DroneKit to connect to all SITL instances..."
