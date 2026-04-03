@@ -20,6 +20,8 @@ import { MockAdapter } from './adapters/mock.js';
 import { Aerostack2Adapter } from './adapters/aerostack2.js';
 import { PyBulletAdapter } from './adapters/pybullet.js';
 import { ArduPilotAdapter } from './adapters/ardupilot.js';
+import { missionManager } from './state/missions.js';
+import { planManager } from './planner/engine.js';
 
 // --- Configuration ---
 // Auto-detect backend: check if Supervisor is running on 8080
@@ -27,7 +29,7 @@ const SUPERVISOR_URL = process.env.AUTOM8TE_SUPERVISOR_URL || 'http://localhost:
 let BACKEND = process.env.AUTOM8TE_BACKEND || 'auto';
 const DRONE_COUNT = parseInt(process.env.AUTOM8TE_DRONES || '4', 10);
 const GUI = process.env.AUTOM8TE_GUI === 'true';
-const PERCEPTION = process.env.AUTOM8TE_PERCEPTION || 'mock';
+const PERCEPTION = process.env.AUTOM8TE_PERCEPTION || 'none';
 const ARDUPILOT_PATH = process.env.ARDUPILOT_PATH || null;
 
 // --- Perception ---
@@ -35,14 +37,25 @@ let detector;
 if (PERCEPTION === 'yolo') {
   const { ObjectDetector } = await import('./perception/detector.js');
   detector = new ObjectDetector();
-} else {
+} else if (PERCEPTION === 'mock') {
   detector = new MockDetector();
+} else {
+  // No perception — stub that returns empty arrays
+  detector = {
+    async start() {},
+    async stop() {},
+    getObjects() { return []; },
+    getObjectsByDrone() { return []; },
+    findObject() { return null; },
+    getObjectPosition() { return null; },
+    predictPosition() { return null; },
+  };
 }
 
 // --- Backend resolution ---
 // No fallback — use what's configured
 if (BACKEND === 'auto') {
-  BACKEND = 'dronekit';
+  BACKEND = 'supervisor';
 }
 
 // --- Backend ---
@@ -70,8 +83,12 @@ switch (BACKEND) {
   case 'pybullet':
     backend = new PyBulletAdapter({ droneCount: DRONE_COUNT, gui: GUI });
     break;
-  default:
+  case 'mock':
     backend = new MockAdapter(DRONE_COUNT);
+    break;
+  default:
+    console.error(`[AutoM8te] Unknown backend: "${BACKEND}". Valid: supervisor, ardupilot, aerostack2, pybullet, mock`);
+    process.exit(1);
 }
 
 // --- Group Manager ---
@@ -246,6 +263,37 @@ const tools = [
     },
   },
   {
+    name: 'drone_plan',
+    description: 'Start, stop, or query autonomous behavior plans. Plans are composable behavior trees that react to perception events without LLM polling. Use templates for common missions, or pass a custom tree JSON for novel behaviors. Actions: start, stop, status, capabilities.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['start', 'stop', 'status', 'capabilities'], description: 'Plan action' },
+        plan: { type: 'string', description: 'Template name: find_and_surround, find_and_follow, find_and_intercept, find_and_harass, patrol, scout_and_react' },
+        tree: { type: 'object', description: 'Custom behavior tree JSON definition. Nodes: sequence, selector, parallel, random, repeat, invert, plus any registered action/condition name.' },
+        target: { type: 'string', description: 'Target class or ID to find (e.g. "car", "person", "drone")' },
+        plan_id: { type: 'string', description: 'Plan ID (for stop/status of a specific plan)' },
+        group: { type: 'string', description: 'Use a specific drone group' },
+        params: {
+          type: 'object',
+          description: 'Plan parameters',
+          properties: {
+            radius: { type: 'number', description: 'Surround/harass orbit radius (default: 15)' },
+            distance: { type: 'number', description: 'Follow distance (default: 10)' },
+            altitude: { type: 'number', description: 'Operating altitude (default: 10)' },
+            pattern: { type: 'string', description: 'Search pattern (default: expanding_square)' },
+            width: { type: 'number', description: 'Search area width (default: 80)' },
+            height: { type: 'number', description: 'Search area height (default: 80)' },
+            aggressive: { type: 'boolean', description: 'Aggressive mode (default: false)' },
+            formation: { type: 'string', description: 'Formation while executing' },
+          },
+        },
+        vars: { type: 'object', description: 'Custom variables accessible in the behavior tree blackboard (bb.vars)' },
+      },
+      required: ['action'],
+    },
+  },
+  {
     name: 'drone_modifier',
     description: 'Define a custom movement modifier or list available modifiers.',
     inputSchema: {
@@ -262,6 +310,34 @@ const tools = [
       required: ['action'],
     },
   },
+  {
+    name: 'drone_mission',
+    description: 'Start, stop, or check autonomous missions. Missions chain search → detect → execute. Types: find_and_surround, find_and_follow, find_and_intercept, find_and_harass, patrol.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['start', 'stop', 'status'], description: 'Mission action' },
+        mission: { type: 'string', enum: ['find_and_surround', 'find_and_follow', 'find_and_intercept', 'find_and_harass', 'patrol'], description: 'Mission type (for start)' },
+        target: { type: 'string', description: 'Target to find (class name like "car", "person", or object ID)' },
+        mission_id: { type: 'string', description: 'Specific mission ID (for stop/status)' },
+        group: { type: 'string', description: 'Use specific drone group' },
+        params: {
+          type: 'object',
+          description: 'Mission parameters',
+          properties: {
+            radius: { type: 'number', description: 'Surround/harass orbit radius in meters (default: 15)' },
+            distance: { type: 'number', description: 'Follow distance in meters (default: 10)' },
+            altitude: { type: 'number', description: 'Operating altitude (default: 10)' },
+            pattern: { type: 'string', description: 'Search pattern (default: expanding_square)' },
+            width: { type: 'number', description: 'Search area width (default: 80)' },
+            height: { type: 'number', description: 'Search area height (default: 80)' },
+            aggressive: { type: 'boolean', description: 'Aggressive intercept mode (default: false)' },
+          },
+        },
+      },
+      required: ['action'],
+    },
+  },
 ];
 
 // --- Helpers ---
@@ -274,106 +350,40 @@ function resolveTargetDrones(args, allDroneIds) {
 
 async function getRichContext() {
   const states = await backend.getDroneStates();
-  const allPositions = [...states.values()].map(s => s.position);
-  const swarmCenter = allPositions.length > 0 ? [
-    allPositions.reduce((s, p) => s + p[0], 0) / allPositions.length,
-    allPositions.reduce((s, p) => s + p[1], 0) / allPositions.length,
-    allPositions.reduce((s, p) => s + p[2], 0) / allPositions.length,
-  ] : [0, 0, 0];
 
-  const objects = detector.getObjects().map(obj => {
-    const dx = obj.position[0] - swarmCenter[0];
-    const dy = obj.position[1] - swarmCenter[1];
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-    const dirs = [
-      [-22.5, 22.5, 'ahead'], [22.5, 67.5, 'ahead-right'], [67.5, 112.5, 'right'],
-      [112.5, 157.5, 'behind-right'], [-157.5, -112.5, 'behind-left'],
-      [-112.5, -67.5, 'left'], [-67.5, -22.5, 'ahead-left'],
-    ];
-    let direction = 'behind';
-    for (const [lo, hi, d] of dirs) { if (angle >= lo && angle < hi) { direction = d; break; } }
-    return {
-      id: obj.id, class: obj.class, confidence: Math.round(obj.confidence * 100),
-      distance_m: Math.round(dist * 10) / 10, direction,
-    };
-  });
-
-  const groupSummaries = {};
-  for (const [name, group] of groups.groups) {
-    if (group.drones.size === 0) continue;
-    const droneStates = {};
-    for (const droneId of group.drones) {
-      const state = states.get(droneId);
-      if (state) {
-        droneStates[droneId] = {
-          position: state.position.map(p => Math.round(p * 10) / 10),
-          status: state.status, battery: state.battery,
-        };
-      }
-    }
-    groupSummaries[name] = {
-      count: group.drones.size, formation: group.formation,
-      task: group.task?.type || 'idle', drones: droneStates,
-    };
+  // Drone positions + mode (compact)
+  const droneList = [];
+  for (const [id, s] of states) {
+    droneList.push({
+      id,
+      pos: s.position.map(p => Math.round(p * 10) / 10),
+      mode: s.mode || s.status,
+    });
   }
 
-  return { swarm: { total: states.size, center: swarmCenter.map(p => Math.round(p * 10) / 10), groups: groupSummaries }, objects };
+  // What each drone's camera sees
+  for (const d of droneList) {
+    const objs = detector.getObjectsByDrone ? detector.getObjectsByDrone(d.id) : [];
+    if (objs.length > 0) {
+      d.sees = objs.map(o => ({ id: o.id, class: o.class, confidence: Math.round(o.confidence * 100) }));
+    }
+  }
+
+  // Active missions (compact)
+  const missionStatus = missionManager.status();
+  const missions = missionStatus.missions
+    ? missionStatus.missions.map(m => ({ id: m.mission_id, type: m.type, phase: m.phase, target: m.target }))
+    : missionStatus.mission_id
+      ? [{ id: missionStatus.mission_id, type: missionStatus.type, phase: missionStatus.phase, target: missionStatus.target }]
+      : [];
+
+  return { drones: droneList, missions };
 }
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function verifyDroneState(droneIds, expectedCheck, timeoutMs = 3000) {
-  // Poll drone states until expected condition is met or timeout
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const states = await backend.getDroneStates();
-    const results = {};
-    let allOk = true;
-    for (const id of droneIds) {
-      const s = states.get(id);
-      if (!s) { results[id] = '❌ not found'; allOk = false; continue; }
-      const check = expectedCheck(s);
-      results[id] = check.ok ? `✅ ${check.detail}` : `⏳ ${check.detail}`;
-      if (!check.ok) allOk = false;
-    }
-    if (allOk) return { verified: true, results };
-    await sleep(500);
-  }
-  // Timeout — report actual state
-  const states = await backend.getDroneStates();
-  const results = {};
-  for (const id of droneIds) {
-    const s = states.get(id);
-    if (!s) { results[id] = '❌ not found'; continue; }
-    const check = expectedCheck(s);
-    results[id] = check.ok ? `✅ ${check.detail}` : `❌ ${check.detail}`;
-  }
-  return { verified: false, results };
-}
-
-async function formatWithContext(message, verification = null) {
+async function formatWithContext(message) {
   const ctx = await getRichContext();
-  const lines = [message];
-  if (verification) {
-    const status = verification.verified ? '✅ Verified' : '⚠️ Not confirmed';
-    lines.push(`\n${status}:`);
-    for (const [id, detail] of Object.entries(verification.results)) {
-      lines.push(`  ${id}: ${detail}`);
-    }
-  }
-  lines.push('---');
-  lines.push(`📍 Swarm (${ctx.swarm.total} drones):`);
-  for (const [name, g] of Object.entries(ctx.swarm.groups)) {
-    lines.push(`  ${name} (${g.count}): ${g.task} ${g.formation !== 'none' ? 'in ' + g.formation : ''}`);
-  }
-  if (ctx.objects.length > 0) {
-    lines.push('👁️ Detected:');
-    for (const obj of ctx.objects.slice(0, 5)) {
-      lines.push(`  ${obj.class}: ${obj.distance_m}m ${obj.direction}`);
-    }
-  }
-  return `${lines.join('\n')}\n<context>${JSON.stringify(ctx)}</context>`;
+  return `${message}\n<context>${JSON.stringify(ctx)}</context>`;
 }
 
 // --- Tool Execution ---
@@ -392,39 +402,23 @@ async function executeTool(name, args) {
           const spd = resolveSpeed(args.speed || 'normal');
           await Promise.all(droneIds.map(id => backend.takeoff(id, alt, spd)));
           if (args.group) groups.setGroupTask(args.group, { type: 'taking off', altitude_m: alt });
-          const v = await verifyDroneState(droneIds, s => {
-            const airborne = s.position[2] > 1.0;
-            return { ok: airborne, detail: airborne ? `alt ${s.position[2].toFixed(1)}m, ${s.mode}` : `alt ${s.position[2].toFixed(1)}m — still on ground` };
-          });
-          return formatWithContext(`${target}: takeoff to ${alt}m`, v);
+          return formatWithContext(`${target}: takeoff to ${alt}m`);
         }
         case 'land': {
           const spd = resolveSpeed(args.speed || 'slow');
           await Promise.all(droneIds.map(id => backend.land(id, spd)));
           if (args.group) groups.setGroupTask(args.group, { type: 'landing' });
-          const v = await verifyDroneState(droneIds, s => {
-            const grounded = s.position[2] < 0.5;
-            return { ok: grounded, detail: grounded ? 'landed' : `alt ${s.position[2].toFixed(1)}m — descending` };
-          });
-          return formatWithContext(`${target}: land`, v);
+          return formatWithContext(`${target}: land`);
         }
         case 'hover': {
           await Promise.all(droneIds.map(id => backend.hover(id)));
           if (args.group) groups.setGroupTask(args.group, { type: 'hovering' });
-          const v = await verifyDroneState(droneIds, s => {
-            const hovering = s.mode === 'HOVER';
-            return { ok: hovering, detail: `${s.mode} at alt ${s.position[2].toFixed(1)}m` };
-          });
-          return formatWithContext(`${target}: hover`, v);
+          return formatWithContext(`${target}: hover`);
         }
         case 'rtl': {
           await Promise.all(droneIds.map(id => backend.rtl(id)));
           if (args.group) groups.setGroupTask(args.group, { type: 'returning' });
-          const v = await verifyDroneState(droneIds, s => {
-            const grounded = s.position[2] < 0.5;
-            return { ok: grounded, detail: grounded ? 'landed' : `alt ${s.position[2].toFixed(1)}m — returning` };
-          }, 5000);
-          return formatWithContext(`${target}: return to launch`, v);
+          return formatWithContext(`${target}: return to launch`);
         }
         case 'emergency': {
           await backend.emergency(args.drone_id);
@@ -440,25 +434,10 @@ async function executeTool(name, args) {
       const { vector, frame } = resolveDirection(args.direction);
       const scaled = scaleVector(vector, args.distance_m);
       const speed = resolveSpeed(args.speed || 'normal');
-      // Capture starting positions for verification
-      const startStates = await backend.getDroneStates();
-      const startPositions = {};
-      for (const id of droneIds) {
-        const s = startStates.get(id);
-        if (s) startPositions[id] = [...s.position];
-      }
       await Promise.all(droneIds.map(id => backend.goTo(id, scaled[0], scaled[1], scaled[2], speed, frame)));
       if (args.group) groups.setGroupTask(args.group, { type: 'moving', direction: args.direction, distance_m: args.distance_m });
       const target = args.group || args.drone_id || 'all';
-      const v = await verifyDroneState(droneIds, s => {
-        const start = startPositions[s.id];
-        if (!start) return { ok: false, detail: 'no start position' };
-        const dx = s.position[0] - start[0], dy = s.position[1] - start[1], dz = s.position[2] - start[2];
-        const moved = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        const moving = moved > 0.3 || s.mode === 'GUIDED';
-        return { ok: moving, detail: moving ? `moved ${moved.toFixed(1)}m, ${s.mode}` : `hasn't moved (${s.mode})` };
-      });
-      return formatWithContext(`${target}: move ${args.direction} ${args.distance_m}m`, v);
+      return formatWithContext(`${target}: move ${args.direction} ${args.distance_m}m`);
     }
 
     case 'drone_formation': {
@@ -635,6 +614,101 @@ async function executeTool(name, args) {
         }
         default:
           return `Unknown modifier action: ${args.action}`;
+      }
+    }
+
+    case 'drone_plan': {
+      switch (args.action) {
+        case 'start': {
+          if (!args.plan && !args.tree) return 'Need plan template name or custom tree JSON. Use action="capabilities" to see options.';
+          if (!args.target && args.plan !== 'patrol') return 'Need target (e.g. "car", "person", "drone")';
+          const droneIds = args.group ? groups.getDronesInGroup(args.group) : allDroneIds;
+          if (droneIds.length === 0) return 'No drones available';
+          try {
+            const result = planManager.start({
+              plan: args.plan,
+              tree: args.tree,
+              target: args.target,
+              droneIds,
+              backend,
+              detector,
+              groups,
+              groupName: args.group || null,
+              params: args.params || {},
+              vars: args.vars || {},
+            });
+            return formatWithContext(`Plan ${result.plan_id} started: ${result.name} → "${args.target}" with ${droneIds.length} drones`);
+          } catch (err) {
+            return `Error starting plan: ${err.message}`;
+          }
+        }
+        case 'stop': {
+          const result = planManager.stop(args.plan_id);
+          if (result.error) return result.error;
+          if (result.stopped !== undefined) return formatWithContext(`Stopped ${result.stopped} plan(s)`);
+          return formatWithContext(`Plan ${result.plan_id} stopped`);
+        }
+        case 'status': {
+          const result = planManager.status(args.plan_id);
+          if (result.active_plans === 0) return formatWithContext('No active plans');
+          if (result.plans) {
+            const lines = result.plans.map(p =>
+              `${p.plan_id}: ${p.name} → "${p.target}" (${p.target_found ? 'tracking' : 'searching'}, ${p.elapsed_s}s, ${p.drones} drones)`
+            );
+            return formatWithContext(`Active plans:\n${lines.join('\n')}`);
+          }
+          return formatWithContext(`Plan ${result.plan_id}: ${result.name} → "${result.target}" (${result.target_found ? 'tracking' : 'searching'}, ${result.elapsed_s}s)`);
+        }
+        case 'capabilities': {
+          const caps = planManager.capabilities();
+          return [
+            `Templates: ${caps.templates.join(', ')}`,
+            `Actions: ${caps.actions.join(', ')}`,
+            `Conditions: ${caps.conditions.join(', ')}`,
+            `Node types: ${caps.node_types.join(', ')}`,
+            '',
+            'Custom tree example:',
+            '{ "type": "sequence", "nodes": [{ "type": "dispatchSearch" }, { "type": "scanForTarget" }, { "type": "surround" }] }',
+          ].join('\n');
+        }
+        default:
+          return 'Unknown plan action. Use: start, stop, status, capabilities';
+      }
+    }
+
+    case 'drone_mission': {
+      switch (args.action) {
+        case 'start': {
+          if (!args.mission) return 'Need mission type (find_and_surround, find_and_follow, find_and_intercept, find_and_harass, patrol)';
+          if (!args.target && args.mission !== 'patrol') return 'Need target (e.g. "car", "person", "drone")';
+          const droneIds = args.group ? groups.getDronesInGroup(args.group) : allDroneIds;
+          if (droneIds.length === 0) return 'No drones available';
+          const result = await missionManager.start(
+            args.mission, args.target, args.params || {},
+            droneIds, backend, detector, groups, args.group || null,
+          );
+          return formatWithContext(`Mission ${result.mission_id} started: ${args.mission} → "${args.target}" with ${droneIds.length} drones`, null);
+        }
+        case 'stop': {
+          const result = missionManager.stop(args.mission_id);
+          if (result.error) return result.error;
+          return formatWithContext(`Mission ${result.mission_id} stopped (was: ${result.phase})`);
+        }
+        case 'status': {
+          const result = missionManager.status(args.mission_id);
+          if (!result.mission_id) return formatWithContext('No active mission');
+          const lines = [
+            `Mission ${result.mission_id}: ${result.type}`,
+            `Phase: ${result.phase}`,
+            `Target: ${result.target}${result.target_found ? ' ✓ FOUND' : ' (searching...)'}`,
+            `Drones: ${result.drones_assigned}`,
+            `Elapsed: ${result.elapsed_s}s`,
+          ];
+          if (result.error) lines.push(`Error: ${result.error}`);
+          return formatWithContext(lines.join('\n'));
+        }
+        default:
+          return 'Unknown mission action. Use: start, stop, status';
       }
     }
 
