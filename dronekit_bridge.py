@@ -38,17 +38,24 @@ def connect_drones(count, base_port):
 
 
 def arm_and_takeoff(vehicle, alt):
-    """Arms vehicle and flies to target altitude."""
-    # Disable prearm checks and lower loop rate (Webots can't sustain 400Hz)
-    vehicle.parameters['ARMING_CHECK'] = 0
-    vehicle.parameters['SCHED_LOOP_RATE'] = 200
-    time.sleep(2)
+    """Arms vehicle and flies to target altitude using MAVLink force arm."""
+    from pymavlink import mavutil
 
     vehicle.mode = VehicleMode("GUIDED")
-    vehicle.armed = True
+    time.sleep(1)
+
+    # Force arm via MAVLink command (bypasses all prearm checks)
+    vehicle._master.mav.command_long_send(
+        vehicle._master.target_system,
+        vehicle._master.target_component,
+        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+        0,  # confirmation
+        1,  # arm
+        21196,  # force arm magic number (bypasses prearm)
+        0, 0, 0, 0, 0)
 
     # Wait for arming
-    for _ in range(30):
+    for _ in range(15):
         if vehicle.armed:
             break
         time.sleep(1)
