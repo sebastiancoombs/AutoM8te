@@ -39,6 +39,10 @@ def connect_drones(count, base_port):
 
 def arm_and_takeoff(vehicle, alt):
     """Arms vehicle and flies to target altitude."""
+    # Disable prearm checks (Webots can't sustain 400Hz)
+    vehicle.parameters['ARMING_CHECK'] = 0
+    time.sleep(1)
+
     vehicle.mode = VehicleMode("GUIDED")
     vehicle.armed = True
 
