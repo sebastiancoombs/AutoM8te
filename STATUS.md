@@ -52,7 +52,8 @@
 - [x] Mission coordinator — full state machine (IDLE → PURSUING → INTERCEPTED)
 - [x] Auto-reassignment on kill/loss
 - [x] Test simulation — **3/4 kills in 6s** (25 m/s interceptors vs 15 m/s targets)
-- [ ] Integrated with DroneKit server (needs `/api/intercept` endpoint)
+- [x] Integrated with DroneKit server (`/api/intercept` + background tick loop)
+- [ ] Acceleration commands applied to vehicles (DroneKit MAVLink integration)
 - [ ] Running in Webots (enemy drones as additional SITL instances)
 
 ## Not Started

@@ -285,6 +285,60 @@ def intercept_status():
     return jsonify(interceptor_coordinator.get_status())
 
 
+def intercept_tick_loop():
+    """
+    Background thread that runs the interceptor coordinator tick loop.
+    Calls coordinator.tick() at 10 Hz, applies acceleration commands to vehicles.
+    """
+    global interceptor_coordinator
+    print("Intercept tick loop started")
+    dt = 0.1  # 10 Hz
+
+    while True:
+        time.sleep(dt)
+
+        if interceptor_coordinator is None:
+            continue
+
+        # Collect current drone states
+        drone_states = {}
+        with vehicle_lock:
+            for did, v in vehicles.items():
+                loc = v.location.local_frame
+                drone_states[did] = {
+                    "position": [
+                        loc.north or 0,
+                        loc.east or 0,
+                        -(loc.down or 0),
+                    ],
+                    "velocity": list(v.velocity or [0, 0, 0]),
+                }
+
+        # Get target states (would come from perception/YOLO in real system)
+        # For now, coordinator uses whatever targets were set via /api/intercept
+        target_states = {
+            tid: interceptor_coordinator.targets[tid]
+            for tid in interceptor_coordinator.targets
+            if interceptor_coordinator.targets[tid].get("alive", True)
+        }
+
+        if not target_states:
+            continue
+
+        # Run coordinator tick
+        commands, status = interceptor_coordinator.tick(drone_states, target_states, dt)
+
+        # Apply acceleration commands to drones
+        # NOTE: DroneKit doesn't have direct accel API, would need:
+        #   - MAVLink SET_POSITION_TARGET_LOCAL_NED with acceleration fields
+        #   - Or convert accel → velocity → goto waypoint
+        # For now, log the commands (integration TODO)
+        for did, accel in commands.items():
+            if accel is not None:
+                # print(f"{did}: accel={accel}")  # Uncomment for debug
+                pass
+
+
 # ─── Main ────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
@@ -308,5 +362,13 @@ if __name__ == '__main__':
         print("No drones connected. Exiting.")
         exit(1)
 
-    print(f"\n✓ {len(vehicles)} drones connected. Starting HTTP server...\n")
+    # Start intercept tick loop in background thread
+    if HAS_INTERCEPTOR:
+        tick_thread = threading.Thread(target=intercept_tick_loop, daemon=True)
+        tick_thread.start()
+        print("✓ Intercept tick loop started\n")
+    else:
+        print("⚠ Interceptor module not available\n")
+
+    print(f"✓ {len(vehicles)} drones connected. Starting HTTP server...\n")
     app.run(host='0.0.0.0', port=args.http_port, debug=False)
