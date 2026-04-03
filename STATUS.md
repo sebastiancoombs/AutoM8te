@@ -47,13 +47,12 @@
 ## Interceptor Module
 - [x] Target assignment — Hungarian algorithm (scipy), optimal 1:1 matching
 - [x] Swarm comms — broadcast message bus, per-drone send/listen
-- [x] Pursuit — Augmented Proportional Navigation with jink detection
-- [x] Predictive intercept point calculation
+- [x] Hybrid pursuit — predictive intercept + pure pursuit (APN removed, too conservative)
+- [x] Realistic target simulation — acceleration-limited evasion (jink, circle, sprint, random)
 - [x] Mission coordinator — full state machine (IDLE → PURSUING → INTERCEPTED)
 - [x] Auto-reassignment on kill/loss
-- [x] Test simulation (4v4, runs standalone)
-- [ ] **Pursuit tuning** — interceptors track but don't close (daily cron priority)
-- [ ] Integrated with DroneKit server
+- [x] Test simulation — **3/4 kills in 6s** (25 m/s interceptors vs 15 m/s targets)
+- [ ] Integrated with DroneKit server (needs `/api/intercept` endpoint)
 - [ ] Running in Webots (enemy drones as additional SITL instances)
 
 ## Not Started

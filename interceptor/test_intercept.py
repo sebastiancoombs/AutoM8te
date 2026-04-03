@@ -11,34 +11,63 @@ import time
 from .mission import InterceptCoordinator
 
 
-def simulate_evasive_target(pos, vel, t, style="jink"):
-    """Simulate an evasive enemy drone."""
+def simulate_evasive_target(pos, vel, t, style="jink", dt=0.1):
+    """
+    Simulate an evasive enemy drone with realistic acceleration limits.
+    
+    Now models acceleration → velocity → position (like real physics).
+    """
     pos = np.array(pos, dtype=float)
     vel = np.array(vel, dtype=float)
 
+    # Compute desired acceleration based on evasion style
     if style == "jink":
-        # Periodic lateral jinking
-        jink = np.array([
-            3.0 * np.sin(t * 2.0),
-            3.0 * np.cos(t * 1.5),
-            0.5 * np.sin(t * 0.8),
+        # Periodic lateral jinking acceleration
+        accel = np.array([
+            5.0 * np.sin(t * 2.0),
+            5.0 * np.cos(t * 1.5),
+            1.0 * np.sin(t * 0.8),
         ])
-        new_vel = vel + jink * 0.1
     elif style == "circle":
-        # Circular evasion
+        # Circular evasion with centripetal acceleration
         speed = np.linalg.norm(vel)
-        angle = t * 0.5
-        new_vel = np.array([speed * np.cos(angle), speed * np.sin(angle), 0])
+        if speed < 1.0:
+            speed = 8.0  # Minimum speed for circle
+        radius = 20.0
+        omega = speed / radius
+        angle = t * omega
+        # Tangent vector
+        tangent = np.array([-np.sin(angle), np.cos(angle), 0])
+        # Centripetal acceleration toward center
+        center_dir = np.array([-np.cos(angle), -np.sin(angle), 0])
+        accel = tangent * 2.0 + center_dir * (speed * omega)
     elif style == "sprint":
-        # Straight line sprint (hardest to catch if faster)
-        new_vel = vel
+        # Straight line sprint with slight corrections
+        forward = vel / max(np.linalg.norm(vel), 1.0)
+        accel = forward * 1.0  # Gentle forward bias
     elif style == "random":
-        # Random acceleration
-        new_vel = vel + np.random.randn(3) * 0.5
+        # Random acceleration changes
+        accel = np.random.randn(3) * 3.0
     else:
-        new_vel = vel
+        accel = np.zeros(3)
 
-    new_pos = pos + new_vel * 0.1
+    # Limit acceleration to realistic drone limits (6 m/s²)
+    max_accel = 6.0
+    accel_mag = np.linalg.norm(accel)
+    if accel_mag > max_accel:
+        accel = accel * (max_accel / accel_mag)
+
+    # Integrate acceleration → velocity
+    new_vel = vel + accel * dt
+
+    # Speed limit (targets max at 15 m/s)
+    speed = np.linalg.norm(new_vel)
+    if speed > 15.0:
+        new_vel = new_vel * (15.0 / speed)
+
+    # Integrate velocity → position
+    new_pos = pos + new_vel * dt
+
     return new_pos.tolist(), new_vel.tolist()
 
 
@@ -79,11 +108,11 @@ def run_simulation():
     print(f"Assignments: {assignments}")
     print()
 
-    # Simulate 500 ticks (50 seconds at 10Hz)
+    # Simulate 1200 ticks (120 seconds at 10Hz)
     dt = 0.1
     kills = 0
 
-    for tick in range(500):
+    for tick in range(1200):
         t = tick * dt
 
         # Update target positions (evasive maneuvers)
@@ -103,10 +132,10 @@ def run_simulation():
             if accel is not None:
                 state = interceptor_positions[did]
                 vel = np.array(state["velocity"]) + accel * dt
-                # Speed cap at 15 m/s
+                # Speed cap at 25 m/s (interceptors 67% faster than 15 m/s targets)
                 speed = np.linalg.norm(vel)
-                if speed > 15.0:
-                    vel = vel * (20.0 / speed)  # Interceptors faster than targets
+                if speed > 25.0:
+                    vel = vel * (25.0 / speed)
                 pos = np.array(state["position"]) + vel * dt
                 interceptor_positions[did] = {
                     "position": pos.tolist(),
@@ -132,7 +161,8 @@ def run_simulation():
                     dist = info.get("distance", 0)
                     eti = info.get("eti", 0)
                     jink = "JINK!" if info.get("jink_detected") else ""
-                    print(f"  {did} → {info.get('target')}: {dist:.1f}m, ETA {eti:.1f}s {jink}")
+                    mode = info.get("mode", "?")
+                    print(f"  {did} → {info.get('target')}: {dist:.1f}m, ETA {eti:.1f}s [{mode}] {jink}")
                 elif info.get("state") == "intercepted":
                     print(f"  {did} → {info.get('target')}: INTERCEPTED ✓")
                 elif info.get("state") == "idle":

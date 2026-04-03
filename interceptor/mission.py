@@ -43,14 +43,14 @@ class InterceptorDrone:
 
         self.state = InterceptState.IDLE
         self.assigned_target = None
-        self.pursuit = PursuitController(nav_gain=4.0, max_accel=8.0)
-        self.predictor = PredictiveIntercept(max_speed=15.0)
+        self.pursuit = PursuitController(nav_gain=6.0, max_accel=10.0)
+        self.predictor = PredictiveIntercept(max_speed=25.0)
 
         self.position = np.zeros(3)
         self.velocity = np.zeros(3)
 
         # Intercept threshold (meters)
-        self.intercept_radius = 2.0
+        self.intercept_radius = 5.0
 
         # Lost target timeout (seconds)
         self.lost_timeout = 5.0
@@ -137,14 +137,7 @@ class InterceptorDrone:
                 "distance": distance,
             }
 
-        # Compute pursuit acceleration
-        accel_cmd, pursuit_info = self.pursuit.update(
-            self.position, self.velocity,
-            target_pos, target_vel,
-            dt=dt,
-        )
-
-        # Also compute predicted intercept point (for display/planning)
+        # Hybrid pursuit: predictive intercept when far, APN when close
         target_accel = None
         if len(self.pursuit.target_history) >= 3:
             target_accel = self.pursuit._estimate_target_accel(target_pos, target_vel, dt)
@@ -152,6 +145,22 @@ class InterceptorDrone:
         intercept_point, eti = self.predictor.compute_intercept_point(
             self.position, target_pos, target_vel, target_accel,
         )
+
+        # Hybrid pursuit: predictive → pure pursuit
+        # Skip APN entirely — it's not aggressive enough for these evasive targets
+        if distance > 35.0:
+            # Far: Fly to predicted intercept point (command guidance)
+            to_intercept = intercept_point - self.position
+            accel_cmd = to_intercept / np.linalg.norm(to_intercept) * 10.0
+            pursuit_mode = "predictive"
+            pursuit_info = {"closing_speed": np.dot(self.velocity, to_intercept / np.linalg.norm(to_intercept))}
+        else:
+            # Close-in: Pure pursuit (fly directly at target with max accel)
+            to_target = (target_pos - self.position)
+            to_target_norm = np.linalg.norm(to_target)
+            accel_cmd = (to_target / to_target_norm) * 10.0
+            pursuit_mode = "pure_pursuit"
+            pursuit_info = {"closing_speed": np.dot(self.velocity, to_target / to_target_norm)}
 
         return accel_cmd, {
             "state": "pursuing",
@@ -161,6 +170,7 @@ class InterceptorDrone:
             "closing_speed": pursuit_info.get("closing_speed", 0),
             "jink_detected": pursuit_info.get("jink_detected", False),
             "intercept_point": intercept_point.tolist(),
+            "mode": pursuit_mode,
         }
 
     def _on_reassign(self, msg):

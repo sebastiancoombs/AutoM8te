@@ -117,7 +117,9 @@ class PursuitController:
         accel_cmd = pn_accel + aug_accel + jink_accel
 
         # Add bias toward target (ensures closing even in edge cases)
-        bias = los_unit * 1.0  # Gentle pull toward target
+        # Stronger bias when closing speed is low
+        bias_strength = 2.0 if closing_speed < 5.0 else 1.0
+        bias = los_unit * bias_strength
         accel_cmd += bias
 
         # Time to intercept estimate
