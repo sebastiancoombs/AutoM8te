@@ -358,6 +358,9 @@ async function getRichContext() {
       id,
       pos: s.position.map(p => Math.round(p * 10) / 10),
       mode: s.mode || s.status,
+      ...(s.target ? { target: s.target.map(p => Math.round(p * 10) / 10) } : {}),
+      ...(s.velocity && s.velocity.some(v => Math.abs(v) > 0.1) 
+        ? { vel: s.velocity.map(v => Math.round(v * 10) / 10) } : {}),
     });
   }
 
@@ -377,12 +380,40 @@ async function getRichContext() {
       ? [{ id: missionStatus.mission_id, type: missionStatus.type, phase: missionStatus.phase, target: missionStatus.target }]
       : [];
 
-  return { drones: droneList, missions };
+  // Active plans
+  const planStatus = planManager.status();
+  const plans = planStatus.plans
+    ? planStatus.plans.map(p => ({ id: p.plan_id, name: p.name, target: p.target, found: p.target_found }))
+    : planStatus.plan_id
+      ? [{ id: planStatus.plan_id, name: planStatus.name, target: planStatus.target, found: planStatus.target_found }]
+      : [];
+
+  return { drones: droneList, missions, ...(plans.length ? { plans } : {}) };
 }
 
 
-async function formatWithContext(message) {
+/**
+ * Wait for backend state to update after a command, then build context.
+ * Polls until drones start moving or a short timeout elapses.
+ * This prevents returning stale pre-command positions.
+ */
+async function formatWithContext(message, { waitMs = 300 } = {}) {
+  if (waitMs > 0) {
+    await new Promise(r => setTimeout(r, waitMs));
+  }
   const ctx = await getRichContext();
+  
+  // Add movement status: are drones still moving toward targets?
+  let moving = 0;
+  for (const d of ctx.drones) {
+    if (d.mode === 'GUIDED' || d.mode === 'FOLLOWING_PATH' || d.mode === 'INTERCEPTING') {
+      moving++;
+    }
+  }
+  if (moving > 0) {
+    ctx.note = `${moving} drone(s) in motion — positions are en-route, not final`;
+  }
+
   return `${message}\n<context>${JSON.stringify(ctx)}</context>`;
 }
 

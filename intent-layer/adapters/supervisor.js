@@ -64,12 +64,15 @@ export class SupervisorAdapter {
       this.drones.set(id, {
         id,
         position: state.position,
-        velocity: state.velocity,
+        velocity: state.velocity || [0, 0, 0],
+        target: state.target || null,
         heading: 0,
         armed: state.armed,
         mode: state.mode,
         battery: 100,
         status: state.mode.toLowerCase(),
+        path_progress: state.path_progress || null,
+        mission: state.mission || null,
       });
     }
   }
@@ -118,11 +121,34 @@ export class SupervisorAdapter {
     return fetchJSON('/api/land', 'POST', { drone_id: droneId });
   }
 
-  async goTo(droneId, x, y, z, speed) {
+  async goTo(droneId, x, y, z, speed, frame) {
     const err = await this._ensureConnected();
     if (err) return err;
+    if (frame === 'absolute') {
+      // Absolute world position
+      return fetchJSON('/api/goto_abs', 'POST', {
+        drone_id: droneId, x, y, z, speed,
+      });
+    }
+    // Relative offset — x maps to Webots X, y maps to Webots Y
+    // If altitude component is 0 (horizontal move), preserve current altitude
+    let altitude = z;
+    if (altitude === 0) {
+      const drone = this.drones.get(droneId);
+      if (drone) {
+        altitude = drone.position[2]; // Keep current altitude
+      }
+    }
     return fetchJSON('/api/goto', 'POST', {
-      drone_id: droneId, north: x, east: y, altitude: z, speed,
+      drone_id: droneId, north: y, east: x, altitude, speed,
+    });
+  }
+
+  async goToAbs(droneId, x, y, z, speed) {
+    const err = await this._ensureConnected();
+    if (err) return err;
+    return fetchJSON('/api/goto_abs', 'POST', {
+      drone_id: droneId, x, y, z, speed,
     });
   }
 
@@ -167,6 +193,38 @@ export class SupervisorAdapter {
       paths: { [droneId]: waypoints },
       speed,
     });
+  }
+
+  // --- Missions ---
+
+  async startMission(type, targetClass, droneIds = null) {
+    const err = await this._ensureConnected();
+    if (err) return err;
+    const body = { type, target_class: targetClass };
+    if (droneIds) body.drone_ids = droneIds;
+    return fetchJSON('/api/mission', 'POST', body);
+  }
+
+  async stopMission(droneIds = null) {
+    const err = await this._ensureConnected();
+    if (err) return err;
+    const body = {};
+    if (droneIds) body.drone_ids = droneIds;
+    return fetchJSON('/api/mission/stop', 'POST', body);
+  }
+
+  // --- Follow ---
+
+  async startFollow(droneId, targetClass) {
+    const err = await this._ensureConnected();
+    if (err) return err;
+    return fetchJSON('/api/follow', 'POST', { drone_id: droneId, target_class: targetClass });
+  }
+
+  async stopFollow(droneId) {
+    const err = await this._ensureConnected();
+    if (err) return err;
+    return fetchJSON('/api/follow/stop', 'POST', { drone_id: droneId });
   }
 
   async executeChoreography(shape, droneIds, scale = 5) {
