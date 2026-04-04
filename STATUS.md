@@ -46,13 +46,14 @@
 
 ## Interceptor Module
 - [x] Target assignment — Hungarian algorithm (scipy), optimal 1:1 matching
-- [x] Swarm comms — broadcast message bus, per-drone send/listen
-- [x] Hybrid pursuit — predictive intercept + pure pursuit (APN removed, too conservative)
+- [x] Swarm comms — ZMQ-based message bus (inproc:// for sim, tcp:// for real)
+- [x] Hybrid pursuit — predictive intercept + lead pursuit with curved trajectory prediction
 - [x] Realistic target simulation — acceleration-limited evasion (jink, circle, sprint, random)
-- [x] Mission coordinator — full state machine (IDLE → PURSUING → INTERCEPTED)
-- [x] Auto-reassignment on kill/loss
-- [x] Test simulation — **3/4 kills in 6s** (25 m/s interceptors vs 15 m/s targets)
-- [x] Integrated with DroneKit server (`/api/intercept` + background tick loop)
+- [x] Mission coordinator — full state machine (transitions library)
+- [x] Auto-reassignment on kill/loss (idle/intercepted drones get new targets)
+- [x] Test simulation — **3-4/4 kills in 14s** (25 m/s interceptors vs 15 m/s targets)
+- [x] Kill tracking fixed (coordinator now uses DroneComms for message reception)
+- [ ] Integrated with DroneKit/intent-layer server (standalone test only)
 - [ ] Acceleration commands applied to vehicles (DroneKit MAVLink integration)
 - [ ] Running in Webots (enemy drones as additional SITL instances)
 
