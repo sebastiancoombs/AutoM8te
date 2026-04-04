@@ -13,6 +13,7 @@ This is what real missile guidance uses against maneuvering targets.
 
 import numpy as np
 from collections import deque
+from filterpy.kalman import KalmanFilter as KF
 
 
 class PursuitController:
@@ -211,21 +212,44 @@ class PursuitController:
 class PredictiveIntercept:
     """
     Higher-level intercept planner that predicts target trajectory
-    and flies to the predicted intercept point.
-    
-    Uses iterative prediction: estimate where target will be at
-    time T, compute time to reach that point, refine T, repeat.
+    using a Kalman filter and flies to the predicted intercept point.
+
+    State: [x, y, z, vx, vy, vz], Measurement: [x, y, z]
     """
 
-    def __init__(self, max_speed=15.0, prediction_iterations=3):
+    def __init__(self, max_speed=15.0, prediction_iterations=3, dt=0.1):
         self.max_speed = max_speed
         self.iterations = prediction_iterations
 
+        # Kalman filter: 6 state (pos + vel), 3 measurement (pos)
+        self.kf = KF(dim_x=6, dim_z=3)
+
+        # State transition: constant velocity model
+        self.kf.F = np.eye(6)
+        for i in range(3):
+            self.kf.F[i, i + 3] = dt
+
+        # Measurement matrix: we observe position only
+        self.kf.H = np.zeros((3, 6))
+        self.kf.H[0, 0] = 1.0
+        self.kf.H[1, 1] = 1.0
+        self.kf.H[2, 2] = 1.0
+
+        # Covariances
+        self.kf.P *= 100.0  # Initial uncertainty
+        self.kf.R *= 2.0    # Measurement noise
+        # Process noise — higher for velocity states (maneuvers)
+        q_pos = 0.1
+        q_vel = 5.0
+        self.kf.Q = np.diag([q_pos, q_pos, q_pos, q_vel, q_vel, q_vel])
+
+        self._initialized = False
+
     def compute_intercept_point(self, pursuer_pos, target_pos, target_vel, target_accel=None):
         """
-        Compute the optimal intercept point assuming target continues
-        its current trajectory (with acceleration if known).
-        
+        Compute the optimal intercept point using Kalman-filtered
+        target state prediction.
+
         Returns:
             intercept_point: np.array [x, y, z]
             time_to_intercept: float (seconds)
@@ -234,19 +258,25 @@ class PredictiveIntercept:
         target_pos = np.array(target_pos, dtype=float)
         target_vel = np.array(target_vel, dtype=float)
 
-        if target_accel is not None:
-            target_accel = np.array(target_accel, dtype=float)
-        else:
-            target_accel = np.zeros(3)
+        # Initialize KF on first call
+        if not self._initialized:
+            self.kf.x = np.array([[target_pos[0]], [target_pos[1]], [target_pos[2]],
+                                  [target_vel[0]], [target_vel[1]], [target_vel[2]]])
+            self._initialized = True
 
-        # Iterative refinement
-        t = np.linalg.norm(target_pos - pursuer_pos) / self.max_speed  # Initial guess
+        # Predict + update
+        self.kf.predict()
+        self.kf.update(target_pos.reshape(3, 1))
+
+        # Extract filtered state (flatten from (n,1) to (n,))
+        filtered_pos = self.kf.x[:3].flatten()
+        filtered_vel = self.kf.x[3:].flatten()
+
+        # Iterative intercept point refinement using filtered state
+        t = np.linalg.norm(filtered_pos - pursuer_pos) / self.max_speed
 
         for _ in range(self.iterations):
-            # Predict target position at time t (with acceleration)
-            predicted_pos = target_pos + target_vel * t + 0.5 * target_accel * t * t
-
-            # Compute time for pursuer to reach predicted position
+            predicted_pos = filtered_pos + filtered_vel * t
             dist = np.linalg.norm(predicted_pos - pursuer_pos)
             t = dist / self.max_speed
 

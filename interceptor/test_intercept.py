@@ -142,13 +142,10 @@ def run_simulation():
                     "velocity": vel.tolist(),
                 }
 
-        # Check for new kills
-        for did, info in status.items():
-            if info.get("state") == "intercepted":
-                new_kill_target = info.get("target")
-                if coord.targets.get(new_kill_target, {}).get("alive") == False:
-                    if kills < 4:  # Only print first time
-                        pass  # Already counted
+        # Check for new kills (target marked dead by coordinator)
+        current_alive = sum(1 for t in coord.targets.values() if t.get("alive", True))
+        if current_alive < (4 - kills):
+            kills = 4 - current_alive  # Update kill count based on alive targets
 
         # Periodic status
         if tick % 20 == 0:  # Every 2 seconds
