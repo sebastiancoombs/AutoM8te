@@ -1,148 +1,125 @@
 /**
  * Behavior Planner Engine
  * 
- * Bridges the intent layer and backend through composable behavior trees.
+ * Bridges intent layer → behavior tree → backend adapter.
  * 
- * Key concepts:
- *   - Plans are behavior trees (BT) that tick on a loop
- *   - Each plan has a blackboard with backend refs, perception, state
- *   - Plans can be created from templates or custom JSON (LLM-generated)
- *   - Multiple plans can run concurrently (one per group/drone-set)
- *   - Plans react to perception events without LLM intervention
+ * Uses the custom async BT engine (bt.js) — not the npm behaviortree package.
  * 
- * The LLM calls drone_plan to:
- *   1. Start a named template:  { action: "start", plan: "find_and_surround", target: "car" }
- *   2. Start a custom BT:       { action: "start", tree: { ...json BT definition... }, target: "person" }
- *   3. Stop a plan:             { action: "stop", plan_id: "p_001" }
- *   4. List running plans:      { action: "status" }
+ * Key design decisions:
+ *   - Every node is a fresh instance (no shared state)
+ *   - Blackboard is per-plan with optional parent scope (global events)
+ *   - JSON tree definitions compiled to node instances
+ *   - Plans tick asynchronously, nodes can return RUNNING across ticks
+ *   - Halt propagation: stopping a plan halts all running children
+ *   - Cross-plan events via shared EventBus on global blackboard
  */
 
-import { BehaviorTree, Sequence, Selector, Task, Random,
-         SUCCESS, FAILURE, RUNNING, decorators } from 'behaviortree';
-import { ACTION_REGISTRY } from './actions.js';
-import { CONDITION_REGISTRY } from './conditions.js';
+import {
+  Blackboard, BehaviorTreeRunner, EventBus,
+  Sequence, ReactiveSequence, Selector, ReactiveSelector,
+  Parallel, Inverter, ForceSuccess, ForceFailure,
+  Repeat, RetryUntilSuccess, Timeout, Cooldown, Guard,
+  SUCCESS, FAILURE, RUNNING,
+} from './bt.js';
+import { ACTION_FACTORIES } from './actions.js';
 import { TEMPLATES } from './templates.js';
 
-const { InvertDecorator, CooldownDecorator, AlwaysSucceedDecorator, AlwaysFailDecorator } = decorators;
+// ─── Global Event Bus ───────────────────────────────────────────────
+// Shared across all plans for cross-plan coordination.
 
-// ─── Register all actions + conditions as BT tasks ──────────────────
+const globalEvents = new EventBus();
 
-for (const [name, task] of Object.entries(ACTION_REGISTRY)) {
-  BehaviorTree.register(name, task);
-}
-for (const [name, task] of Object.entries(CONDITION_REGISTRY)) {
-  BehaviorTree.register(name, task);
-}
-
-// ─── JSON Tree Builder ──────────────────────────────────────────────
+// ─── JSON → Node Compiler ───────────────────────────────────────────
 
 /**
- * Build a BT node tree from a JSON definition.
- * Supports: sequence, selector, parallel, random, repeat, invert,
- *           alwaysSucceed, alwaysFail, cooldown, and any registered task.
+ * Compile a JSON tree definition into a live node tree.
+ * 
+ * Supported types:
+ *   Control:    sequence, reactiveSequence, selector, reactiveSelector, parallel
+ *   Decorators: inverter, forceSuccess, forceFailure, repeat, retry, timeout, cooldown, guard
+ *   Leaves:     any key from ACTION_FACTORIES
  */
-function buildNode(def) {
+function compileNode(def) {
   if (typeof def === 'string') {
-    // Registered task name
-    return def;
+    // Leaf node by name
+    const factory = ACTION_FACTORIES[def];
+    if (!factory) throw new Error(`Unknown node: "${def}". Available: ${Object.keys(ACTION_FACTORIES).join(', ')}`);
+    return factory();
   }
 
   const { type, name, nodes, node } = def;
 
+  // --- Control nodes ---
   switch (type) {
     case 'sequence':
-      return new Sequence({
-        name: name || 'sequence',
-        nodes: (nodes || []).map(buildNode),
-      });
+      return new Sequence(name || 'sequence', (nodes || []).map(compileNode));
+
+    case 'reactiveSequence':
+      return new ReactiveSequence(name || 'reactiveSequence', (nodes || []).map(compileNode));
 
     case 'selector':
-      return new Selector({
-        name: name || 'selector',
-        nodes: (nodes || []).map(buildNode),
-      });
+      return new Selector(name || 'selector', (nodes || []).map(compileNode));
 
-    case 'random':
-      return new Random({
-        name: name || 'random',
-        nodes: (nodes || []).map(buildNode),
-      });
+    case 'reactiveSelector':
+      return new ReactiveSelector(name || 'reactiveSelector', (nodes || []).map(compileNode));
 
-    case 'repeat': {
-      // Repeat decorator — wraps a single child.
-      // If no limit, repeats forever (returns RUNNING).
-      const child = node ? buildNode(node) : (nodes ? buildNode(nodes[0]) : null);
-      if (!child) throw new Error('repeat node needs a child (node or nodes[0])');
-      const limit = def.repeat || def.times || Infinity;
-      
-      return new Task({
-        name: name || 'repeat',
-        start(bb) {
-          bb._repeatCount = bb._repeatCount || {};
-          bb._repeatCount[name || 'repeat'] = 0;
-        },
-        run(bb) {
-          const key = name || 'repeat';
-          const count = bb._repeatCount[key] || 0;
-          if (count >= limit) {
-            bb._repeatCount[key] = 0;
-            return SUCCESS;
-          }
+    case 'parallel':
+      return new Parallel(
+        name || 'parallel',
+        (nodes || []).map(compileNode),
+        {
+          successThreshold: def.successThreshold,
+          failureThreshold: def.failureThreshold,
+        }
+      );
 
-          // Create a mini-tree for the child and step it
-          const childTree = new BehaviorTree({
-            tree: child,
-            blackboard: bb,
-          });
-          childTree.step();
-          
-          // Check result — if the child returned SUCCESS, increment and keep going
-          // If FAILURE, the repeat fails. If RUNNING, stay running.
-          bb._repeatCount[key] = count + 1;
-          if (limit === Infinity) return RUNNING;
-          return bb._repeatCount[key] >= limit ? SUCCESS : RUNNING;
-        },
-      });
-    }
-
+    // --- Decorators ---
+    case 'inverter':
     case 'invert':
-      return new InvertDecorator({
-        name: name || 'invert',
-        node: node ? buildNode(node) : buildNode(nodes[0]),
-      });
+      return new Inverter(name || 'inverter', compileChild(def));
 
-    case 'alwaysSucceed':
-      return new AlwaysSucceedDecorator({
-        name: name || 'alwaysSucceed',
-        node: node ? buildNode(node) : buildNode(nodes[0]),
-      });
+    case 'forceSuccess':
+      return new ForceSuccess(name || 'forceSuccess', compileChild(def));
 
-    case 'alwaysFail':
-      return new AlwaysFailDecorator({
-        name: name || 'alwaysFail',
-        node: node ? buildNode(node) : buildNode(nodes[0]),
-      });
+    case 'forceFailure':
+      return new ForceFailure(name || 'forceFailure', compileChild(def));
+
+    case 'repeat':
+      return new Repeat(name || 'repeat', compileChild(def), def.times || Infinity);
+
+    case 'retry':
+      return new RetryUntilSuccess(name || 'retry', compileChild(def), def.maxRetries || 3);
+
+    case 'timeout':
+      return new Timeout(name || 'timeout', compileChild(def), def.ms || 30000);
 
     case 'cooldown':
-      return new CooldownDecorator({
-        name: name || 'cooldown',
-        cooldown: def.cooldown || 5000,
-        node: node ? buildNode(node) : buildNode(nodes[0]),
-      });
+      return new Cooldown(name || 'cooldown', compileChild(def), def.ms || 5000);
 
+    case 'guard':
+      if (!def.condition) throw new Error('Guard needs a condition');
+      return new Guard(name || 'guard', compileNode(def.condition), compileChild(def));
+
+    // --- Leaf node (action/condition by name) ---
     default: {
-      // Must be a registered task name
-      const registered = BehaviorTree.getNode?.(type);
-      if (registered) return type; // Return string ref — BT resolves it
-      
-      // Check our registries directly
-      if (ACTION_REGISTRY[type] || CONDITION_REGISTRY[type]) {
-        return type; // Return string ref
+      const factory = ACTION_FACTORIES[type];
+      if (!factory) {
+        throw new Error(
+          `Unknown node type: "${type}". ` +
+          `Control: sequence, reactiveSequence, selector, reactiveSelector, parallel. ` +
+          `Decorators: inverter, forceSuccess, forceFailure, repeat, retry, timeout, cooldown, guard. ` +
+          `Actions: ${Object.keys(ACTION_FACTORIES).join(', ')}`
+        );
       }
-
-      throw new Error(`Unknown BT node type: "${type}". Available actions: ${Object.keys(ACTION_REGISTRY).join(', ')}. Conditions: ${Object.keys(CONDITION_REGISTRY).join(', ')}`);
+      return factory();
     }
   }
+}
+
+function compileChild(def) {
+  if (def.node) return compileNode(def.node);
+  if (def.nodes && def.nodes.length > 0) return compileNode(def.nodes[0]);
+  throw new Error(`Node "${def.type}" needs a child (node or nodes[0])`);
 }
 
 // ─── Plan Instance ──────────────────────────────────────────────────
@@ -155,10 +132,14 @@ class Plan {
     this.name = config.name || treeDef.name || 'unnamed';
     this.startedAt = Date.now();
     this._stopped = false;
-    this._tickInterval = null;
 
-    // Build the blackboard
-    this.blackboard = {
+    // Create blackboard with global parent for cross-plan events
+    const globalBB = new Blackboard();
+    globalBB.events = globalEvents;
+    this.blackboard = new Blackboard(globalBB);
+
+    // Populate blackboard
+    this.blackboard.merge({
       backend: config.backend,
       detector: config.detector,
       groups: config.groups,
@@ -167,9 +148,8 @@ class Plan {
       targetId: null,
       targetPosition: null,
       targetVelocity: null,
+      _lastKnownPosition: null,
       detectedObjects: [],
-      searchDispatched: false,
-      searchWaypoints: null,
       params: {
         altitude: 10,
         radius: 15,
@@ -182,77 +162,70 @@ class Plan {
         ...config.params,
       },
       vars: config.vars || {},
-    };
-
-    // Build the tree from JSON definition
-    const rootNode = buildNode(treeDef);
-    this.tree = new BehaviorTree({
-      tree: rootNode,
-      blackboard: this.blackboard,
     });
+
+    // Track target position for recovery
+    this.blackboard.events.on('bb:targetPosition', ({ value }) => {
+      if (value) this.blackboard.set('_lastKnownPosition', [...value]);
+    });
+
+    // Track group name for dynamic membership
+    this._groupName = config.groupName || null;
+
+    // Compile the tree
+    const root = compileNode(treeDef);
+    this.runner = new BehaviorTreeRunner(root, this.blackboard);
   }
 
   start(tickMs = 500) {
     this._stopped = false;
-    this._tickInterval = setInterval(() => this._tick(), tickMs);
-    // Immediate first tick
-    this._tick();
+    this.runner.start(tickMs);
+
+    // Emit plan started event
+    globalEvents.emit('plan:started', { planId: this.id, name: this.name });
+
     return this.status();
   }
 
-  stop() {
+  async stop() {
     this._stopped = true;
-    if (this._tickInterval) {
-      clearInterval(this._tickInterval);
-      this._tickInterval = null;
-    }
-    // Hover all drones
-    for (const id of this.blackboard.droneIds) {
-      this.blackboard.backend.hover(id).catch(() => {});
-    }
+    await this.runner.stop();
+    globalEvents.emit('plan:stopped', { planId: this.id, name: this.name });
   }
 
-  _tick() {
-    if (this._stopped) return;
+  /** Sync group membership — call before status checks */
+  syncGroup() {
+    if (!this._groupName) return;
+    const groups = this.blackboard.get('groups');
+    if (!groups) return;
 
-    // Sync group membership if tracked
-    this._syncGroup();
-
-    try {
-      this.tree.step();
-    } catch (err) {
-      console.error(`[Plan ${this.id}] Tick error:`, err.message);
-    }
-  }
-
-  _syncGroup() {
-    const bb = this.blackboard;
-    if (!bb._groupName || !bb.groups) return;
-    
-    const currentIds = bb.groups.getDronesInGroup(bb._groupName);
+    const currentIds = groups.getDronesInGroup(this._groupName);
     if (!currentIds || currentIds.length === 0) return;
 
-    const changed = currentIds.length !== bb.droneIds.length ||
-      currentIds.some(id => !bb.droneIds.includes(id));
-    
+    const existing = this.blackboard.get('droneIds') || [];
+    const changed = currentIds.length !== existing.length ||
+      currentIds.some(id => !existing.includes(id));
+
     if (changed) {
-      bb.droneIds = currentIds;
+      this.blackboard.set('droneIds', currentIds);
     }
   }
 
   status() {
+    this.syncGroup();
     const elapsed = Math.round((Date.now() - this.startedAt) / 1000);
     return {
       plan_id: this.id,
       name: this.name,
       running: !this._stopped,
-      target: this.blackboard.targetClass,
-      target_found: !!this.blackboard.targetPosition,
-      target_position: this.blackboard.targetPosition,
-      drones: this.blackboard.droneIds.length,
-      drone_ids: this.blackboard.droneIds,
+      target: this.blackboard.get('targetClass'),
+      target_found: !!this.blackboard.get('targetPosition'),
+      target_position: this.blackboard.get('targetPosition'),
+      drones: (this.blackboard.get('droneIds') || []).length,
+      drone_ids: this.blackboard.get('droneIds') || [],
       elapsed_s: elapsed,
-      vars: { ...this.blackboard.vars },
+      ticks: this.runner.ticks,
+      vars: { ...(this.blackboard.get('vars') || {}) },
     };
   }
 }
@@ -272,15 +245,14 @@ class PlanManager {
   }
 
   /**
-   * Start a plan from a template name or custom tree JSON.
+   * Start a plan from template or custom tree JSON.
    */
-  start(config) {
+  async start(config) {
     const { plan, tree, target, droneIds, backend, detector, groups, groupName, params, vars } = config;
 
-    // Resolve tree definition
     let treeDef;
     if (tree) {
-      treeDef = tree; // Custom JSON tree from LLM
+      treeDef = tree;
     } else if (plan && TEMPLATES[plan]) {
       treeDef = TEMPLATES[plan];
     } else {
@@ -288,30 +260,19 @@ class PlanManager {
       throw new Error(`Unknown plan template: "${plan}". Available: ${available}`);
     }
 
-    // Stop existing plan for this group/drone-set
+    // Stop existing plan for this drone set
     const key = groupName || this._droneKey(droneIds);
     const existingId = this.groupPlans.get(key);
     if (existingId) {
       const existing = this.plans.get(existingId);
-      if (existing) existing.stop();
+      if (existing) await existing.stop();
       this.groupPlans.delete(key);
     }
 
     const instance = new Plan(treeDef, {
       name: plan || treeDef.name || 'custom',
-      target,
-      droneIds,
-      backend,
-      detector,
-      groups,
-      params,
-      vars,
+      target, droneIds, backend, detector, groups, groupName, params, vars,
     });
-
-    // Track group association
-    if (groupName) {
-      instance.blackboard._groupName = groupName;
-    }
 
     this.plans.set(instance.id, instance);
     this.groupPlans.set(key, instance.id);
@@ -320,23 +281,22 @@ class PlanManager {
   }
 
   /**
-   * Stop a plan by ID, or all plans.
+   * Stop a plan by ID or all plans.
    */
-  stop(planId) {
+  async stop(planId) {
     if (planId) {
       const plan = this.plans.get(planId);
       if (!plan) return { error: `Plan ${planId} not found` };
-      plan.stop();
+      await plan.stop();
       for (const [key, id] of this.groupPlans) {
         if (id === planId) { this.groupPlans.delete(key); break; }
       }
       return plan.status();
     }
 
-    // Stop all
     let stopped = 0;
     for (const [, plan] of this.plans) {
-      if (!plan._stopped) { plan.stop(); stopped++; }
+      if (!plan._stopped) { await plan.stop(); stopped++; }
     }
     this.groupPlans.clear();
     return { stopped };
@@ -363,15 +323,23 @@ class PlanManager {
   }
 
   /**
-   * List available templates + registered actions/conditions.
+   * List capabilities — templates, actions, conditions, node types.
    */
   capabilities() {
     return {
       templates: Object.keys(TEMPLATES),
-      actions: Object.keys(ACTION_REGISTRY),
-      conditions: Object.keys(CONDITION_REGISTRY),
-      node_types: ['sequence', 'selector', 'parallel', 'random', 'repeat', 'invert', 'alwaysSucceed', 'alwaysFail', 'cooldown'],
+      actions: Object.keys(ACTION_FACTORIES),
+      node_types: [
+        'sequence', 'reactiveSequence', 'selector', 'reactiveSelector', 'parallel',
+        'inverter', 'forceSuccess', 'forceFailure', 'repeat', 'retry', 'timeout', 'cooldown', 'guard',
+      ],
+      description: 'Compose trees from these node types. Actions are leaves. Control/decorator nodes wrap children.',
     };
+  }
+
+  /** Get global event bus for cross-plan coordination */
+  get events() {
+    return globalEvents;
   }
 }
 

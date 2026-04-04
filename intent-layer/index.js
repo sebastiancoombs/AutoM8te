@@ -625,7 +625,7 @@ async function executeTool(name, args) {
           const droneIds = args.group ? groups.getDronesInGroup(args.group) : allDroneIds;
           if (droneIds.length === 0) return 'No drones available';
           try {
-            const result = planManager.start({
+            const result = await planManager.start({
               plan: args.plan,
               tree: args.tree,
               target: args.target,

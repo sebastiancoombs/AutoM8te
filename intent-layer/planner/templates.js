@@ -1,125 +1,103 @@
 /**
- * Behavior Tree Templates — Pre-built trees for common missions.
+ * Behavior Tree Templates — JSON definitions for common missions.
  * 
- * These are JSON definitions that the BehaviorTreeImporter can load.
- * The LLM can also generate custom trees in this same format.
+ * These use the custom BT engine architecture:
+ *   - "reactiveSequence": re-checks conditions every tick, halts children on failure
+ *   - "reactiveSelector": higher-priority branches preempt lower ones
+ *   - StatefulAction nodes get proper halt() calls on interruption
+ *   - "timeout": wrapper that fails after N ms
+ *   - "retry": wrapper that retries on failure
  * 
- * Node types:
- *   - "sequence": All children must succeed (left to right)
- *   - "selector": First child that succeeds wins (fallback)
- *   - "parallel": Run children concurrently
- *   - "repeat": Decorator — repeat child N times (or forever if no limit)
- *   - "invert": Decorator — flip success/failure
- *   - Any registered task name (from actions.js / conditions.js)
+ * The LLM can use these templates or compose custom trees from the same node types.
  */
 
 // ─── Find and Surround ─────────────────────────────────────────────
+// Search for target → surround it → track & maintain surround.
+// If target lost during surround: search last known position.
 
 export const findAndSurround = {
-  type: 'selector',
+  type: 'reactiveSelector',
   name: 'find_and_surround',
   nodes: [
     {
-      // Fast path: target already visible
-      type: 'sequence',
-      name: 'target_visible_path',
+      // Priority 1: target visible → surround with continuous tracking
+      type: 'reactiveSequence',
+      name: 'track_and_surround',
       nodes: [
-        { type: 'scanForTarget' },
-        { type: 'hoverAll' },
-        { type: 'surround' },
+        { type: 'updateTargetPosition' },  // Re-checked every tick. Fails → halts surround
+        { type: 'surround' },               // StatefulAction: onRunning re-sends positions
+      ],
+    },
+    {
+      // Priority 2: target just lost → search last known position
+      type: 'sequence',
+      name: 'recover_lost_target',
+      nodes: [
+        { type: 'hasTarget' }, // Did we ever have it?
         {
-          // Tracking loop: keep updating surround position
-          type: 'repeat',
-          name: 'track_and_surround',
+          type: 'timeout',
+          ms: 15000,
           node: {
-            type: 'sequence',
+            type: 'reactiveSequence',
             nodes: [
-              { type: 'wait' },
-              { type: 'updateTargetPosition' },
-              { type: 'surround' },
+              { type: 'inverter', node: { type: 'scanForTarget' } }, // Keep searching while NOT found
+              { type: 'searchLastKnown' },
             ],
           },
         },
       ],
     },
     {
-      // Slow path: search first
-      type: 'sequence',
-      name: 'search_then_surround',
+      // Priority 3: full area search
+      type: 'reactiveSequence',
+      name: 'search_for_target',
       nodes: [
-        { type: 'dispatchSearch' },
-        {
-          // Search loop: scan while searching
-          type: 'repeat',
-          name: 'search_loop',
-          node: {
-            type: 'selector',
-            nodes: [
-              {
-                type: 'sequence',
-                nodes: [
-                  { type: 'scanForTarget' },
-                  { type: 'hoverAll' },
-                  { type: 'surround' },
-                ],
-              },
-              { type: 'wait' }, // Keep searching
-            ],
-          },
-        },
+        { type: 'inverter', node: { type: 'scanForTarget' } }, // While target NOT found, keep searching
+        { type: 'dispatchSearch' },                              // Halted when scanForTarget succeeds
       ],
     },
   ],
 };
 
 // ─── Find and Follow ────────────────────────────────────────────────
+// Same structure: reactive tracking with recovery fallback.
 
 export const findAndFollow = {
-  type: 'selector',
+  type: 'reactiveSelector',
   name: 'find_and_follow',
   nodes: [
     {
-      type: 'sequence',
-      name: 'target_visible_follow',
+      type: 'reactiveSequence',
+      name: 'track_and_follow',
       nodes: [
-        { type: 'scanForTarget' },
+        { type: 'updateTargetPosition' },
+        { type: 'follow' },
+      ],
+    },
+    {
+      type: 'sequence',
+      name: 'recover_lost_target',
+      nodes: [
+        { type: 'hasTarget' },
         {
-          type: 'repeat',
-          name: 'follow_loop',
+          type: 'timeout',
+          ms: 15000,
           node: {
-            type: 'sequence',
+            type: 'reactiveSequence',
             nodes: [
-              { type: 'updateTargetPosition' },
-              { type: 'follow' },
-              { type: 'wait' },
+              { type: 'inverter', node: { type: 'scanForTarget' } },
+              { type: 'searchLastKnown' },
             ],
           },
         },
       ],
     },
     {
-      type: 'sequence',
-      name: 'search_then_follow',
+      type: 'reactiveSequence',
+      name: 'search_for_target',
       nodes: [
+        { type: 'inverter', node: { type: 'scanForTarget' } },
         { type: 'dispatchSearch' },
-        {
-          type: 'repeat',
-          name: 'search_for_follow',
-          node: {
-            type: 'selector',
-            nodes: [
-              {
-                type: 'sequence',
-                nodes: [
-                  { type: 'scanForTarget' },
-                  { type: 'hoverAll' },
-                  { type: 'follow' },
-                ],
-              },
-              { type: 'wait' },
-            ],
-          },
-        },
       ],
     },
   ],
@@ -128,51 +106,41 @@ export const findAndFollow = {
 // ─── Find and Intercept ─────────────────────────────────────────────
 
 export const findAndIntercept = {
-  type: 'selector',
+  type: 'reactiveSelector',
   name: 'find_and_intercept',
   nodes: [
     {
-      type: 'sequence',
-      name: 'target_visible_intercept',
+      type: 'reactiveSequence',
+      name: 'track_and_intercept',
       nodes: [
-        { type: 'scanForTarget' },
+        { type: 'updateTargetPosition' },
+        { type: 'intercept' },
+      ],
+    },
+    {
+      type: 'sequence',
+      name: 'recover_lost_target',
+      nodes: [
+        { type: 'hasTarget' },
         {
-          type: 'repeat',
-          name: 'intercept_loop',
+          type: 'timeout',
+          ms: 10000, // Shorter recovery for intercept — urgency
           node: {
-            type: 'sequence',
+            type: 'reactiveSequence',
             nodes: [
-              { type: 'updateTargetPosition' },
-              { type: 'intercept' },
-              { type: 'wait' },
+              { type: 'inverter', node: { type: 'scanForTarget' } },
+              { type: 'searchLastKnown' },
             ],
           },
         },
       ],
     },
     {
-      type: 'sequence',
-      name: 'search_then_intercept',
+      type: 'reactiveSequence',
+      name: 'search_for_target',
       nodes: [
+        { type: 'inverter', node: { type: 'scanForTarget' } },
         { type: 'dispatchSearch' },
-        {
-          type: 'repeat',
-          name: 'search_for_intercept',
-          node: {
-            type: 'selector',
-            nodes: [
-              {
-                type: 'sequence',
-                nodes: [
-                  { type: 'scanForTarget' },
-                  { type: 'hoverAll' },
-                  { type: 'intercept' },
-                ],
-              },
-              { type: 'wait' },
-            ],
-          },
-        },
       ],
     },
   ],
@@ -181,114 +149,71 @@ export const findAndIntercept = {
 // ─── Find and Harass ────────────────────────────────────────────────
 
 export const findAndHarass = {
-  type: 'selector',
+  type: 'reactiveSelector',
   name: 'find_and_harass',
   nodes: [
     {
-      type: 'sequence',
-      name: 'target_visible_harass',
+      type: 'reactiveSequence',
+      name: 'track_and_harass',
       nodes: [
-        { type: 'scanForTarget' },
+        { type: 'updateTargetPosition' },
         { type: 'harass' },
       ],
     },
     {
-      type: 'sequence',
-      name: 'search_then_harass',
+      type: 'reactiveSequence',
+      name: 'search_for_target',
       nodes: [
+        { type: 'inverter', node: { type: 'scanForTarget' } },
         { type: 'dispatchSearch' },
-        {
-          type: 'repeat',
-          name: 'search_for_harass',
-          node: {
-            type: 'selector',
-            nodes: [
-              {
-                type: 'sequence',
-                nodes: [
-                  { type: 'scanForTarget' },
-                  { type: 'hoverAll' },
-                  { type: 'harass' },
-                ],
-              },
-              { type: 'wait' },
-            ],
-          },
-        },
       ],
     },
   ],
 };
 
 // ─── Patrol ─────────────────────────────────────────────────────────
+// Continuous area search with periodic detection reporting.
 
 export const patrol = {
   type: 'repeat',
   name: 'patrol',
   node: {
-    type: 'sequence',
+    type: 'parallel',
+    name: 'patrol_with_detection',
+    successThreshold: 1, // Succeeds if search completes (then repeats)
+    failureThreshold: 2, // Never fails from detection alone
     nodes: [
       { type: 'dispatchSearch' },
       {
-        type: 'repeat',
-        name: 'patrol_scan_loop',
-        node: {
-          type: 'sequence',
-          nodes: [
-            { type: 'wait' },
-            {
-              type: 'selector',
-              nodes: [
-                {
-                  // If we spot something, report it but keep patrolling
-                  type: 'sequence',
-                  nodes: [
-                    { type: 'scanForTarget' },
-                    { type: 'wait' }, // Brief pause to register detection
-                  ],
-                },
-                { type: 'wait' }, // Nothing found, keep going
-              ],
-            },
-          ],
-        },
+        type: 'forceSuccess',
+        node: { type: 'scanForTarget' }, // Runs every tick — sets bb if found
       },
     ],
   },
 };
 
 // ─── Scout and React ────────────────────────────────────────────────
-// Example of a more complex composed behavior:
-// "Search an area. If you find a car, follow it. If you find a person, surround them."
+// Search an area. React to detections with priority-based response.
+// Demonstrates composability: the LLM can modify this structure.
 
 export const scoutAndReact = {
-  type: 'repeat',
+  type: 'reactiveSelector',
   name: 'scout_and_react',
-  node: {
-    type: 'sequence',
-    nodes: [
-      { type: 'dispatchSearch' },
-      {
-        type: 'selector',
-        name: 'react_to_detection',
-        nodes: [
-          {
-            // Priority 1: person detected → surround
-            type: 'sequence',
-            nodes: [
-              { type: 'scanForTarget' }, // bb.targetClass should be set
-              { type: 'hoverAll' },
-              { type: 'surround' },
-            ],
-          },
-          {
-            // Priority 2: keep searching
-            type: 'wait',
-          },
-        ],
-      },
-    ],
-  },
+  nodes: [
+    {
+      // Highest priority: if target found, surround it
+      type: 'reactiveSequence',
+      name: 'react_surround',
+      nodes: [
+        { type: 'scanForTarget' },
+        { type: 'surround' },
+      ],
+    },
+    {
+      // Default: keep searching
+      type: 'dispatchSearch',
+    },
+  ],
 };
 
 // ─── Template Registry ──────────────────────────────────────────────
