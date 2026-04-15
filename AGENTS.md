@@ -78,6 +78,7 @@ If ANY answer is wrong, redesign the tool.
 
 ---
 
+
 ## Forbidden Patterns
 
 These patterns are BANNED. If you find yourself writing them, stop.
