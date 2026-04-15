@@ -10,6 +10,8 @@ import numpy as np
 import time
 from .mission import InterceptCoordinator
 
+np.random.seed(7)
+
 
 def simulate_evasive_target(pos, vel, t, style="jink", dt=0.1):
     """
@@ -66,7 +68,7 @@ def simulate_evasive_target(pos, vel, t, style="jink", dt=0.1):
         new_vel = new_vel * (15.0 / speed)
 
     # Integrate velocity → position
-    new_pos = pos + new_vel * dt
+    new_pos = pos + vel * dt + 0.5 * accel * dt * dt
 
     return new_pos.tolist(), new_vel.tolist()
 
@@ -131,12 +133,14 @@ def run_simulation():
         for did, accel in commands.items():
             if accel is not None:
                 state = interceptor_positions[did]
-                vel = np.array(state["velocity"]) + accel * dt
+                prev_vel = np.array(state["velocity"])
+                vel = prev_vel + accel * dt
                 # Speed cap at 25 m/s (interceptors 67% faster than 15 m/s targets)
                 speed = np.linalg.norm(vel)
                 if speed > 25.0:
                     vel = vel * (25.0 / speed)
-                pos = np.array(state["position"]) + vel * dt
+                avg_vel = 0.5 * (prev_vel + vel)
+                pos = np.array(state["position"]) + avg_vel * dt
                 interceptor_positions[did] = {
                     "position": pos.tolist(),
                     "velocity": vel.tolist(),

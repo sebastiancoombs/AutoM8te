@@ -101,7 +101,9 @@ class PursuitController:
         # The augmented term compensates for target maneuvers
 
         # PN component (perpendicular to LOS)
-        pn_accel = self.N * closing_speed * np.cross(los_unit, los_rate)
+        # Guidance law uses ω_LOS × u_LOS. The previous sign was inverted,
+        # which can steer away from the rotating LOS in terminal pursuit.
+        pn_accel = self.N * closing_speed * np.cross(los_rate, los_unit)
 
         # Augmented component (target acceleration normal to LOS)
         if target_accel is not None:

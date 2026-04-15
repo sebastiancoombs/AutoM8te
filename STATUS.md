@@ -1,4 +1,4 @@
-# AutoM8te — Current State (Updated 2026-04-02)
+# AutoM8te — Current State (Updated 2026-04-15)
 
 ## Infrastructure
 - [x] GitHub repo: `sebastiancoombs/AutoM8te`
@@ -47,14 +47,15 @@
 ## Interceptor Module
 - [x] Target assignment — Hungarian algorithm (scipy), optimal 1:1 matching
 - [x] Swarm comms — ZMQ-based message bus (inproc:// for sim, tcp:// for real)
-- [x] Hybrid pursuit — predictive intercept + lead pursuit with curved trajectory prediction
+- [x] Hybrid pursuit — predictive intercept + APN terminal guidance with predictive handoff
 - [x] Realistic target simulation — acceleration-limited evasion (jink, circle, sprint, random)
 - [x] Mission coordinator — full state machine (transitions library)
 - [x] Auto-reassignment on kill/loss (idle/intercepted drones get new targets)
-- [x] Test simulation — **3-4/4 kills in 14s** (25 m/s interceptors vs 15 m/s targets)
+- [x] Test simulation — **4/4 kills in 13.4s** (25 m/s interceptors vs 15 m/s targets)
 - [x] Kill tracking fixed (coordinator now uses DroneComms for message reception)
-- [ ] Integrated with DroneKit/intent-layer server (standalone test only)
-- [ ] Acceleration commands applied to vehicles (DroneKit MAVLink integration)
+- [x] Integrated with DroneKit server (`POST /api/intercept`, background tick loop, coordinator wiring)
+- [ ] Intent layer wired to DroneKit intercept endpoint
+- [ ] Acceleration commands applied to vehicles (DroneKit MAVLink integration still TODO — tick loop logs/owns commands but does not send accel setpoints yet)
 - [ ] Running in Webots (enemy drones as additional SITL instances)
 
 ## Not Started

@@ -51,7 +51,7 @@ class InterceptorDrone:
             initial="idle",
         )
         self.assigned_target = None
-        self.pursuit = PursuitController(nav_gain=6.0, max_accel=10.0)
+        self.pursuit = PursuitController(nav_gain=5.5, max_accel=10.0)
         self.predictor = PredictiveIntercept(max_speed=25.0)
 
         self.position = np.zeros(3)
@@ -147,77 +147,47 @@ class InterceptorDrone:
                 "distance": distance,
             }
 
-        # Hybrid pursuit: predictive intercept when far, APN when close
-        target_accel = None
-        if len(self.pursuit.target_history) >= 3:
-            target_accel = self.pursuit._estimate_target_accel(target_pos, target_vel, dt)
+        # Always update history so acceleration/turn estimates become available.
+        target_accel = self.pursuit._estimate_target_accel(target_pos, target_vel, dt)
 
         intercept_point, eti = self.predictor.compute_intercept_point(
             self.position, target_pos, target_vel, target_accel,
         )
 
-        # Hybrid pursuit: predictive → lead pursuit (not pure pursuit)
-        # Pure pursuit fails against maneuvering targets — need lead aiming
-        if distance > 35.0:
-            # Far: Fly to predicted intercept point (command guidance)
-            to_intercept = intercept_point - self.position
-            accel_cmd = to_intercept / np.linalg.norm(to_intercept) * 10.0
-            pursuit_mode = "predictive"
-            pursuit_info = {"closing_speed": np.dot(self.velocity, to_intercept / np.linalg.norm(to_intercept))}
+        # Hybrid pursuit:
+        # - Far: bias hard toward the predicted intercept point to build closure
+        # - Near: switch to APN terminal guidance for maneuvering targets
+        to_intercept = intercept_point - self.position
+        to_intercept_norm = np.linalg.norm(to_intercept)
+        if to_intercept_norm < 1e-6:
+            to_intercept_dir = (target_pos - self.position) / max(distance, 1e-6)
         else:
-            # Close-in: Aggressive lead pursuit with curved trajectory prediction
-            # Time to intercept estimate (iterative refinement)
-            speed_ratio = np.linalg.norm(self.velocity) / max(np.linalg.norm(target_vel), 1.0)
-            if speed_ratio < 1.1:
-                # Not fast enough — chase intercept point with higher accel
-                time_to_intercept = distance / (np.linalg.norm(self.velocity) * 0.8)
-            else:
-                time_to_intercept = distance / max(speed_ratio * np.linalg.norm(target_vel), 1.0)
-            
-            time_to_intercept = min(time_to_intercept, 2.5)  # Cap prediction horizon
-            
-            # Predict curved trajectory if target is turning (circular evasion detection)
-            if target_accel is not None:
-                # Target is accelerating — estimate turn rate
-                accel_normal = target_accel - np.dot(target_accel, target_vel / max(np.linalg.norm(target_vel), 1.0)) * (target_vel / max(np.linalg.norm(target_vel), 1.0))
-                turn_rate = np.linalg.norm(accel_normal) / max(np.linalg.norm(target_vel), 1.0)
-                
-                if turn_rate > 0.12:  # Circular evasion detected (lowered threshold)
-                    # Predict curved path — aim for center of turn circle
-                    angular_advance = turn_rate * time_to_intercept * 1.5  # Overshoot prediction
-                    # Rotate velocity vector by predicted turn
-                    cos_a = np.cos(angular_advance)
-                    sin_a = np.sin(angular_advance)
-                    # 2D rotation in XY plane (simplified — assumes horizontal turn)
-                    vx, vy = target_vel[0], target_vel[1]
-                    pred_vel = np.array([
-                        vx * cos_a - vy * sin_a,
-                        vx * sin_a + vy * cos_a,
-                        target_vel[2],
-                    ])
-                    # Average velocity over turn
-                    avg_vel = (target_vel + pred_vel) / 2.0
-                    lead_point = target_pos + avg_vel * time_to_intercept
-                else:
-                    # Straight-line prediction
-                    lead_point = target_pos + target_vel * time_to_intercept
-            else:
-                # No accel estimate — simple extrapolation
-                lead_point = target_pos + target_vel * time_to_intercept
-            
-            to_lead = lead_point - self.position
-            to_lead_norm = np.linalg.norm(to_lead)
-            accel_cmd = (to_lead / to_lead_norm) * 10.0
-            
-            # If very close (<20m), switch to pure pursuit with max accel
-            if distance < 20.0:
-                to_target = (target_pos - self.position) / distance
-                accel_cmd = to_target * 10.0
-            
+            to_intercept_dir = to_intercept / to_intercept_norm
+
+        if distance > 32.0:
+            direct_dir = (target_pos - self.position) / distance
+            blended_dir = 0.75 * to_intercept_dir + 0.25 * direct_dir
+            blended_norm = np.linalg.norm(blended_dir)
+            accel_cmd = (blended_dir / max(blended_norm, 1e-6)) * self.pursuit.max_accel
             rel_vel = target_vel - self.velocity
-            closing_speed = -np.dot(rel_vel, (target_pos - self.position) / distance)
-            pursuit_mode = "lead_pursuit"
-            pursuit_info = {"closing_speed": closing_speed, "lead_time": time_to_intercept}
+            pursuit_mode = "predictive"
+            pursuit_info = {
+                "closing_speed": -np.dot(rel_vel, direct_dir),
+                "lead_time": eti,
+            }
+        else:
+            accel_cmd, pursuit_info = self.pursuit.update(
+                self.position,
+                self.velocity,
+                target_pos,
+                target_vel,
+                dt,
+            )
+            pursuit_mode = "apn_terminal"
+
+            # Blend a little lead bias back in near the mode switch to reduce chatter.
+            if distance > 18.0:
+                accel_cmd = 0.8 * accel_cmd + 0.2 * to_intercept_dir * self.pursuit.max_accel
 
         return accel_cmd, {
             "state": "pursuing",
@@ -361,6 +331,8 @@ class InterceptCoordinator:
         commands = {}
         status = {}
 
+        intercepted_targets = set()
+
         for did, drone in self.interceptors.items():
             own_state = interceptor_states.get(did, {
                 "position": [0, 0, 0], "velocity": [0, 0, 0],
@@ -368,6 +340,15 @@ class InterceptCoordinator:
             accel, info = drone.tick(own_state, target_states, dt)
             commands[did] = accel
             status[did] = info
+            if info.get("state") == "intercepted" and info.get("target"):
+                intercepted_targets.add(info["target"])
+
+        if intercepted_targets:
+            with self.lock:
+                for target_id in intercepted_targets:
+                    if target_id in self.targets:
+                        self.targets[target_id]["alive"] = False
+            self.execute_assignment()
 
         return commands, status
 
