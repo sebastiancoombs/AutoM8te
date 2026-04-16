@@ -1,4 +1,4 @@
-# AutoM8te — Current State (Updated 2026-04-15)
+# AutoM8te — Current State (Updated 2026-04-16)
 
 ## Infrastructure
 - [x] GitHub repo: `sebastiancoombs/AutoM8te`
@@ -51,7 +51,7 @@
 - [x] Realistic target simulation — acceleration-limited evasion (jink, circle, sprint, random)
 - [x] Mission coordinator — full state machine (transitions library)
 - [x] Auto-reassignment on kill/loss (idle/intercepted drones get new targets)
-- [x] Test simulation — **4/4 kills in 13.4s** (25 m/s interceptors vs 15 m/s targets)
+- [x] Test simulation — **4/4 kills** (last re-verified 2026-04-16 at **15.4s** after restoring deleted working-tree interceptor files; prior tuned run: **13.4s**) (25 m/s interceptors vs 15 m/s targets)
 - [x] Kill tracking fixed (coordinator now uses DroneComms for message reception)
 - [x] Integrated with DroneKit server (`POST /api/intercept`, background tick loop, coordinator wiring)
 - [ ] Intent layer wired to DroneKit intercept endpoint
